@@ -6,8 +6,9 @@
 <meta name="theme-color" content="#1B2440">
 <meta name="robots" content="noindex, nofollow">
 <title>Tableaux</title>
-<link rel="preconnect" href="https://script.google.com">
-<link rel="preconnect" href="https://script.googleusercontent.com">
+<link rel="preconnect" href="https://firestore.googleapis.com">
+<link rel="modulepreload" href="https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js">
+<link rel="modulepreload" href="https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <style>
 html,body{margin:0;padding:0}
@@ -157,10 +158,11 @@ textarea.ttl:focus{background:#fff;outline:1.5px solid var(--ink)}
 </head>
 <body>
 <div id="root" class="tb"><div style="padding:24px;font-family:system-ui">Chargement…</div></div>
-<script>
-/* Code compilé à l'avance (plus de compilation dans le navigateur).
-   Pour changer d'URL de script, modifiez la ligne API_URL ci-dessous. */
+<script type="module">
+/* Configuration : renseignez FIREBASE_CONFIG ci-dessous (Console Firebase > Paramètres du projet > Vos applications). */
 function _extends() { return _extends = Object.assign ? Object.assign.bind() : function (n) { for (var e = 1; e < arguments.length; e++) { var t = arguments[e]; for (var r in t) ({}).hasOwnProperty.call(t, r) && (n[r] = t[r]); } return n; }, _extends.apply(null, arguments); }
+import { initializeApp } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js";
+import { initializeFirestore, doc, collection, onSnapshot, runTransaction, writeBatch, setDoc } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js";
 const {
   useState,
   useEffect,
@@ -168,24 +170,50 @@ const {
   useCallback
 } = React;
 
-/* ============ Configuration ============ */
-// URL /exec de votre déploiement Apps Script
-const API_URL = "https://script.google.com/macros/s/AKfycbwEfS5sLWYM7Mrckdzi-lO_m-3G8xCnNmvI37yNTi2FDV1XjypBwifBX42gvthRMxCiEw/exec";
-async function api(action) {
-  let data = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : {};
-  const res = await fetch(API_URL, {
-    method: "POST",
-    body: JSON.stringify({
-      action,
-      ...data
-    })
+/* ============ Configuration Firebase ============ */
+// Console Firebase > Paramètres du projet > Vos applications > Application Web > Configuration
+const FIREBASE_CONFIG = {
+  apiKey: "AIzaSyDuELMBbYAFwTFddYja881mUUqYUwePJms",
+  authDomain: "tableaux-669a4.firebaseapp.com",
+  projectId: "tableaux-669a4",
+  storageBucket: "tableaux-669a4.firebasestorage.app",
+  messagingSenderId: "72183332124",
+  appId: "1:72183332124:web:68c1b3356704b518090ed9"
+};
+const CONFIGURED = !!(FIREBASE_CONFIG.apiKey && FIREBASE_CONFIG.projectId);
+const db = CONFIGURED ? initializeFirestore(initializeApp(FIREBASE_CONFIG), {
+  ignoreUndefinedProperties: true
+}) : null;
+// Chaque tableau = un document « boards/{id} » ; la liste d'accueil lit les petits documents « boardsMeta/{id} »
+const boardRef = id => doc(db, "boards", id);
+const metaRef = id => doc(db, "boardsMeta", id);
+class Transient extends Error {}
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+// Retire les doublons (une modification rejouée après une coupure réseau)
+function dedupe(b) {
+  const seen = new Set();
+  b.lists.forEach(l => l.cardIds = l.cardIds.filter(id => b.cards[id] && !seen.has(id) && seen.add(id)));
+  const uniq = a => {
+    const s2 = new Set();
+    return (a || []).filter(x => !s2.has(x.id) && s2.add(x.id));
+  };
+  b.members = uniq(b.members);
+  b.labels = uniq(b.labels);
+  b.lists = uniq(b.lists);
+  b.activity = uniq(b.activity).slice(0, 200);
+  const memberIds = b.members.map(m => m.id);
+  Object.values(b.cards).forEach(c => {
+    c.comments = uniq(c.comments);
+    c.attachments = uniq(c.attachments);
+    c.checklists = uniq(c.checklists);
+    c.checklists.forEach(k => k.items = uniq(k.items));
+    c.labels = [...new Set(c.labels)];
+    c.members = [...new Set(c.members)].filter(m => memberIds.includes(m));
   });
-  if (!res.ok) throw new Error("Le serveur ne répond pas (" + res.status + ").");
-  const j = await res.json();
-  if (j.error) throw new Error(j.error);
-  return j;
+  return b;
 }
-// Copie locale du dernier état connu : affichage immédiat, puis mise à jour depuis Sheets
+// Copie locale du dernier état connu : affichage immédiat, puis mise à jour en direct depuis Firebase
 const local = {
   get(k) {
     try {
@@ -206,17 +234,13 @@ const local = {
     } catch (e) {}
   }
 };
-const creating = {}; // tableaux créés, en cours d'envoi au classeur
-// Réveille le script dès l'ouverture de la page (le premier appel Apps Script est le plus lent)
-const warm = fetch(API_URL, {
-  method: "POST",
-  body: JSON.stringify({
-    action: "listBoards"
-  })
-}).then(r => r.json()).catch(() => null);
+const pendingCreates = {}; // tableaux créés, en cours d'envoi à Firebase
+
 const errText = e => ({
-  INTROUVABLE: "Ce tableau n'existe plus."
-})[e.message] || (e.message === "Failed to fetch" ? "Connexion impossible. Vérifiez votre réseau et l'URL du script." : e.message);
+  INTROUVABLE: "Ce tableau n'existe plus.",
+  "permission-denied": "Firebase refuse l'accès : vérifiez les règles de sécurité Firestore.",
+  "resource-exhausted": "Quota gratuit Firebase atteint pour aujourd'hui."
+})[e.code || e.message] || (e instanceof Transient || e.code === "unavailable" ? "Connexion à Firebase impossible pour le moment. Nouvel essai automatique." : e.message);
 
 /* ============ Utilitaires ============ */
 const rnd = () => Math.random().toString(36).slice(2, 9) + Date.now().toString(36).slice(-4);
@@ -245,13 +269,13 @@ function makeOp(fn, log, who) {
     }
   };
 }
-const replay = (base, ops) => ops.reduce((bb, op) => {
+const replay = (base, ops) => dedupe(ops.reduce((bb, op) => {
   try {
     return op(bb);
   } catch (e) {
     return bb;
   }
-}, clone(base));
+}, clone(base)));
 const PALETTE = ["#2E9E6B", "#E2B203", "#E07B24", "#D9443B", "#8A5CC7", "#2F6FD1", "#2BA3C4", "#7AA83A", "#D3539B", "#4A4F5C"];
 const BG = ["#2F6FD1", "#2E9E6B", "#8A5CC7", "#D9443B", "#E07B24", "#2BA3C4", "#D3539B", "#4A4F5C"];
 const colorOf = s => PALETTE[[...(s || "")].reduce((a, ch) => a + ch.charCodeAt(0), 0) % PALETTE.length];
@@ -445,40 +469,29 @@ function Home(_ref6) {
     color: BG[0]
   });
   const [q, setQ] = useState("");
-  const apply = list => {
-    const pend = Object.values(creating).map(x => x.summary).filter(x => !list.some(y => y.id === x.id));
-    const all = [...list, ...pend];
-    local.set("list", all);
-    setBoards(all);
+  useEffect(() => onSnapshot(collection(db, "boardsMeta"), snap => {
+    const list = snap.docs.map(d => ({
+      id: d.id,
+      ...d.data()
+    })).sort((a, z) => (a.createdAt || 0) - (z.createdAt || 0));
+    local.set("list", list);
+    setBoards(list);
     setErr("");
-  };
-  const load = useCallback(async first => {
-    try {
-      const r = first ? (await warm) || (await api("listBoards")) : await api("listBoards");
-      if (r.error) throw new Error(r.error);
-      apply(r.boards);
-    } catch (e) {
-      if (!local.get("list")) setErr(errText(e));
-    }
-  }, []);
-  useEffect(() => {
-    load(true);
-    const t = setInterval(() => load(false), 30000);
-    return () => clearInterval(t);
-  }, [load]);
+  }, e => setErr(errText(e))), []);
 
-  // Le tableau est préparé ici et ouvert tout de suite ; l'envoi au classeur se fait en arrière-plan
+  // Le tableau est préparé ici et ouvert tout de suite ; l'envoi à Firebase se fait en arrière-plan
   const create = () => {
     const name = nb.name.trim();
     if (!name) return;
     const id = rnd() + rnd().slice(0, 4);
+    const now = Date.now();
     const board = {
       id,
       name,
       color: nb.color,
-      starred: false,
-      version: 0,
-      createdAt: Date.now(),
+      version: 1,
+      createdAt: now,
+      updatedAt: now,
       members: [],
       labels: PALETTE.slice(0, 6).map(color => ({
         id: rnd(),
@@ -494,32 +507,28 @@ function Home(_ref6) {
       cards: {},
       activity: [{
         id: rnd(),
-        at: Date.now(),
+        at: now,
         who: "",
         text: "Tableau créé"
       }]
     };
     const summary = {
-      id,
       name,
       color: nb.color,
       starred: false,
-      updatedAt: Date.now()
+      createdAt: now,
+      updatedAt: now
     };
-    const promise = api("createBoard", {
-      board
-    }).then(r => {
-      board.version = r.version || 1;
-      local.set("b:" + id, board);
-      return r;
-    }).finally(() => delete creating[id]);
-    creating[id] = {
+    const batch = writeBatch(db);
+    batch.set(boardRef(id), board);
+    batch.set(metaRef(id), summary);
+    const promise = batch.commit().finally(() => delete pendingCreates[id]);
+    promise.catch(e => setErr(errText(e)));
+    pendingCreates[id] = {
       board,
-      summary,
       promise
     };
     local.set("b:" + id, board);
-    local.set("list", [...(boards || []), summary]);
     setCreating(false);
     setNb({
       name: "",
@@ -528,22 +537,14 @@ function Home(_ref6) {
     open(id);
   };
   const toggleStar = async b => {
-    setBoards(all => {
-      const n = all.map(x => x.id === b.id ? {
-        ...x,
-        starred: !b.starred
-      } : x);
-      local.set("list", n);
-      return n;
-    });
     try {
-      await api("setStar", {
-        id: b.id,
+      await setDoc(metaRef(b.id), {
         starred: !b.starred
+      }, {
+        merge: true
       });
     } catch (e) {
       setErr(errText(e));
-      load();
     }
   };
   const shown = (boards || []).filter(b => !q || b.name.toLowerCase().includes(q.toLowerCase()));
@@ -1066,7 +1067,7 @@ function Board(_ref9) {
     id,
     back
   } = _ref9;
-  const cached = useRef(creating[id]?.board || local.get("b:" + id));
+  const cached = useRef(pendingCreates[id]?.board || local.get("b:" + id));
   const [b, setB] = useState(cached.current);
   const [state, setState] = useState(cached.current ? "ok" : "loading");
   const [sync, setSync] = useState(cached.current ? "loading" : "ok");
@@ -1102,45 +1103,65 @@ function Board(_ref9) {
   const fail = e => {
     if (e.message === "INTROUVABLE") setState("missing");
   };
+
+  // Modifications pas encore confirmées : gardées dans le navigateur pour survivre à une fermeture
+  const savePending = () => {
+    if (queue.current.length) local.set("p:" + id, ref.current);else local.del("p:" + id);
+  };
+  const backoff = useRef(0);
+  const retryLater = () => {
+    backoff.current = Math.min(30000, backoff.current ? backoff.current * 2 : 3000);
+    clearTimeout(timer.current);
+    timer.current = setTimeout(() => flushRef.current(), backoff.current);
+  };
+
+  // Envoi : transaction Firestore (lecture de la dernière version + application de nos modifications).
+  // Firebase la rejoue automatiquement si quelqu'un d'autre a écrit entre-temps.
   const flush = async () => {
     clearTimeout(timer.current);
-    if (inflight.current || !queue.current.length || !server.current) return;
+    if (inflight.current || !queue.current.length) return;
     inflight.current = true;
     setSync("saving");
     const ops = queue.current.splice(0);
-    let base = server.current;
     try {
-      for (let attempt = 0;; attempt++) {
-        const toSend = replay(base, ops);
-        const r = await api("saveBoard", {
-          id,
-          board: toSend,
-          baseVersion: base.version
+      if (pendingCreates[id]) await pendingCreates[id].promise;
+      let saved;
+      await runTransaction(db, async tx => {
+        const snap = await tx.get(boardRef(id));
+        if (!snap.exists()) throw new Error("INTROUVABLE");
+        const cur = snap.data();
+        const next = replay(cur, ops);
+        next.id = id;
+        next.version = (cur.version || 0) + 1;
+        next.updatedAt = Date.now();
+        next.createdAt = cur.createdAt || next.updatedAt;
+        tx.set(boardRef(id), next);
+        tx.set(metaRef(id), {
+          name: next.name,
+          color: next.color,
+          updatedAt: next.updatedAt,
+          createdAt: next.createdAt
+        }, {
+          merge: true
         });
-        if (r.ok) {
-          confirm({
-            ...toSend,
-            version: r.version
-          });
-          break;
-        }
-        if (r.conflict && attempt < 3) {
-          base = r.board;
-          continue;
-        }
-        throw new Error("Trop de modifications simultanées, nouvel essai.");
-      }
-      show(replay(server.current, queue.current));
-      setSync("ok");
+        saved = next;
+      });
+      confirm(saved);
+      backoff.current = 0;
+      show(replay(saved, queue.current));
+      setSync(queue.current.length ? "pending" : "ok");
     } catch (e) {
       fail(e);
       queue.current = [...ops, ...queue.current];
-      setSync("error");
-      timer.current = setTimeout(() => flushRef.current(), 8000);
+      if (e.message !== "INTROUVABLE") {
+        setSync("error");
+        retryLater();
+      }
     } finally {
       inflight.current = false;
+      savePending();
     }
-    if (queue.current.length) timer.current = setTimeout(() => flushRef.current(), 400);
+    if (queue.current.length && !backoff.current) timer.current = setTimeout(() => flushRef.current(), 300);
   };
   flushRef.current = flush;
   const meRef = useRef("");
@@ -1149,47 +1170,53 @@ function Board(_ref9) {
     const op = makeOp(fn, log, who);
     show(op(clone(ref.current)));
     queue.current.push(op);
-    setSync("pending");
-    clearTimeout(timer.current);
-    timer.current = setTimeout(() => flushRef.current(), 700);
+    savePending();
+    setSync(s => s === "error" ? s : "pending");
+    if (!backoff.current) {
+      clearTimeout(timer.current);
+      timer.current = setTimeout(() => flushRef.current(), 400);
+    }
   }, []);
   useEffect(() => {
     let alive = true;
-    (async () => {
-      try {
-        if (creating[id]) await creating[id].promise;
-        const c = local.get("b:" + id);
-        const r = await api("getBoard", {
-          id,
-          version: c && c.version
-        });
-        if (!alive) return;
-        const fresh = r.unchanged ? c : r.board;
-        confirm(fresh);
-        show(replay(fresh, queue.current));
-        setState("ok");
-        if (queue.current.length) flushRef.current();else setSync("ok");
-      } catch (e) {
-        if (!alive) return;
-        fail(e);
-        if (e.message === "INTROUVABLE") local.del("b:" + id);else if (!cached.current) setState("error:" + errText(e));else setSync("error");
+    // Modifications restées en attente lors d'une visite précédente : on les réaffiche et on les renvoie
+    const pend = local.get("p:" + id);
+    if (pend && !queue.current.length) {
+      queue.current.push(bb => Object.assign(bb, {
+        name: pend.name,
+        color: pend.color,
+        members: pend.members,
+        labels: pend.labels,
+        lists: pend.lists,
+        cards: pend.cards,
+        activity: pend.activity
+      }));
+      show(pend);
+      setState("ok");
+      setSync("pending");
+    }
+    if (pend && !inflight.current) setTimeout(() => flushRef.current(), 0);
+    // Écoute en direct : chaque modification enregistrée (par vous ou par un autre) arrive ici
+    const unsub = onSnapshot(boardRef(id), snap => {
+      if (!alive) return;
+      if (!snap.exists()) {
+        if (snap.metadata.fromCache || pendingCreates[id]) return;
+        local.del("b:" + id);
+        local.del("p:" + id);
+        setState("missing");
+        return;
       }
-    })();
-    const t = setInterval(async () => {
-      if (inflight.current || queue.current.length || !server.current) return;
-      try {
-        const r = await api("getBoard", {
-          id,
-          version: server.current.version
-        });
-        if (r.board && !inflight.current && !queue.current.length) {
-          confirm(r.board);
-          show(r.board);
-        }
-      } catch (e) {
-        fail(e);
-      }
-    }, 15000);
+      if (snap.metadata.hasPendingWrites) return;
+      const fresh = snap.data();
+      if (server.current && (fresh.version || 0) < (server.current.version || 0)) return;
+      confirm(fresh);
+      if (!inflight.current) show(replay(fresh, queue.current));
+      setState("ok");
+      if (!queue.current.length && !inflight.current) setSync("ok");
+    }, e => {
+      if (!alive) return;
+      if (ref.current) setSync("error");else setState("error:" + errText(e));
+    });
     const vis = () => document.visibilityState === "hidden" && flushRef.current();
     const unload = e => {
       if (queue.current.length || inflight.current) {
@@ -1201,14 +1228,15 @@ function Board(_ref9) {
     window.addEventListener("beforeunload", unload);
     return () => {
       alive = false;
-      clearInterval(t);
-      clearTimeout(timer.current);
+      unsub();
+      // S'il reste des modifications, l'envoi continue en arrière-plan après avoir quitté le tableau
+      if (!queue.current.length) clearTimeout(timer.current);
       document.removeEventListener("visibilitychange", vis);
       window.removeEventListener("beforeunload", unload);
     };
   }, [id]);
-  const leave = async () => {
-    await flushRef.current();
+  const leave = () => {
+    flushRef.current();
     back();
   };
   if (state === "loading") return /*#__PURE__*/React.createElement("div", {
@@ -1301,8 +1329,8 @@ function Board(_ref9) {
     loading: "Mise à jour…",
     saving: "Enregistrement…",
     pending: "Modifications en attente",
-    error: "Hors ligne, nouvel essai bientôt",
-    ok: "Enregistré dans Sheets"
+    error: "Hors connexion · modifications gardées, nouvel essai auto",
+    ok: "Enregistré"
   }[sync];
   return /*#__PURE__*/React.createElement("div", {
     className: "bd",
@@ -1775,12 +1803,12 @@ function SettingsPanel(_ref10) {
     confirmLabel: "Supprimer d\xE9finitivement",
     onConfirm: async () => {
       try {
-        await api("deleteBoard", {
-          id: b.id
-        });
+        const bt = writeBatch(db);
+        bt.delete(boardRef(b.id));
+        bt.delete(metaRef(b.id));
+        await bt.commit();
         local.del("b:" + b.id);
-        const l = local.get("list");
-        if (l) local.set("list", l.filter(x => x.id !== b.id));
+        local.del("p:" + b.id);
         back();
       } catch (e) {
         setErr(errText(e));
@@ -1788,7 +1816,7 @@ function SettingsPanel(_ref10) {
     }
   }), /*#__PURE__*/React.createElement("p", {
     className: "hint"
-  }, "Ses lignes sont retir\xE9es du classeur. Les sauvegardes Excel d\xE9j\xE0 faites le conservent.")), err && /*#__PURE__*/React.createElement("p", {
+  }, "Il dispara\xEEt pour tout le monde. Les sauvegardes d\xE9j\xE0 copi\xE9es dans Google Sheets le conservent.")), err && /*#__PURE__*/React.createElement("p", {
     className: "hint",
     role: "status"
   }, err));
@@ -1915,7 +1943,7 @@ function App() {
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
-  if (!API_URL) return /*#__PURE__*/React.createElement("div", {
+  if (!CONFIGURED) return /*#__PURE__*/React.createElement("div", {
     className: "auth"
   }, /*#__PURE__*/React.createElement("div", {
     className: "auth-box"
@@ -1926,7 +1954,7 @@ function App() {
     }
   }, "Configuration incompl\xE8te"), /*#__PURE__*/React.createElement("p", {
     className: "sub"
-  }, "Renseignez API_URL en haut du script de index.html avec l'URL /exec de votre script Apps Script, puis republiez la page.")));
+  }, "Renseignez FIREBASE_CONFIG en haut du script de index.html avec la configuration de votre projet Firebase, puis republiez la page.")));
   if (boardId) return /*#__PURE__*/React.createElement(Board, {
     key: boardId,
     id: boardId,
