@@ -4,9 +4,11 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#1B2440">
+<meta name="robots" content="noindex, nofollow">
 <title>Tableaux</title>
 <style>
 html,body{margin:0;padding:0}
+
 
 @import url('https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=Figtree:wght@400;500;600&display=swap');
 .tb{--ink:#1B2440;--paper:#F6F4F1;--mute:#646A7B;--line:rgba(27,36,64,.12);--red:#D9443B;--green:#2E9E6B;--yellow:#E2B203;
@@ -143,8 +145,10 @@ textarea.ttl:focus{background:#fff;outline:1.5px solid var(--ink)}
 .lbrow .swatch{width:22px;height:22px}
 @media (prefers-reduced-motion:no-preference){.sheet{animation:up .2s ease-out}@keyframes up{from{transform:translateY(20px);opacity:0}}}
 
+.tb .bd-name{color:#fff}.tb .bd-name:focus{color:var(--ink)}
+.who-sel{border:0;border-radius:8px;padding:6px 8px;font-size:13.5px;background:rgba(255,255,255,.92);max-width:150px}
+.mrow span .fld{padding:6px 8px}
 </style>
-<script src="https://accounts.google.com/gsi/client" async></script>
 <script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js" crossorigin></script>
 <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js" crossorigin></script>
 <script src="https://unpkg.com/@babel/standalone@7.25.6/babel.min.js"></script>
@@ -152,75 +156,28 @@ textarea.ttl:focus{background:#fff;outline:1.5px solid var(--ink)}
 <body>
 <div id="root" class="tb"><div style="padding:24px;font-family:system-ui">Chargement…</div></div>
 <script type="text/babel" data-presets="react">
+
 const { useState, useEffect, useRef, useCallback } = React;
 
 /* ============ Configuration ============ */
-// 1. URL /exec de votre déploiement Apps Script
+// URL /exec de votre déploiement Apps Script
 const API_URL = "";
-// 2. ID client OAuth Google (le même que dans Code.gs)
-const GOOGLE_CLIENT_ID = "";
 
-/* ============ Connexion Google ============ */
-// Le jeton Google reste en mémoire : rien n'est enregistré dans le navigateur.
-let ID_TOKEN = null, TOKEN_EXP = 0, waiters = [], gisReady = null;
-function onCredential(resp) {
-  ID_TOKEN = resp.credential;
-  try {
-    let part = ID_TOKEN.split(".")[1].replace(/-/g, "+").replace(/_/g, "/");
-    while (part.length % 4) part += "=";
-    TOKEN_EXP = JSON.parse(atob(part)).exp * 1000;
-  } catch (e) { TOKEN_EXP = 0; }
-  const w = waiters; waiters = []; w.forEach((f) => f(true));
-  window.dispatchEvent(new Event("tb-credential"));
-}
-function initGoogle() {
-  if (!gisReady) gisReady = new Promise((resolve) => {
-    const start = () => {
-      google.accounts.id.initialize({ client_id: GOOGLE_CLIENT_ID, callback: onCredential, auto_select: true, cancel_on_tap_outside: false, use_fedcm_for_prompt: true });
-      resolve();
-    };
-    if (window.google?.accounts?.id) start();
-    else { const t = setInterval(() => { if (window.google?.accounts?.id) { clearInterval(t); start(); } }, 100); }
-  });
-  return gisReady;
-}
-// Demande discrètement un nouveau jeton (il expire au bout d'une heure)
-function refreshToken() {
-  return new Promise(async (resolve) => {
-    await initGoogle();
-    let to;
-    const done = (ok) => { clearTimeout(to); resolve(ok); };
-    to = setTimeout(() => { waiters = waiters.filter((f) => f !== done); resolve(false); }, 20000);
-    waiters.push(done);
-    google.accounts.id.prompt();
-  });
-}
-
-async function api(action, data = {}, retried = false) {
-  if (ID_TOKEN && TOKEN_EXP && TOKEN_EXP - Date.now() < 90000) await refreshToken();
-  const res = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action, token: ID_TOKEN, ...data }) });
+async function api(action, data = {}) {
+  const res = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action, ...data }) });
   if (!res.ok) throw new Error("Le serveur ne répond pas (" + res.status + ").");
   const j = await res.json();
-  if (j.error === "SESSION" && !retried && ID_TOKEN && (await refreshToken())) return api(action, data, true);
-  if (j.error) {
-    if (j.error === "SESSION") window.dispatchEvent(new Event("tb-session"));
-    throw new Error(j.error);
-  }
+  if (j.error) throw new Error(j.error);
   return j;
 }
-const errText = (e) => ({
-  SESSION: "Votre connexion Google a expiré. Reconnectez-vous.",
-  ACCES: "Vous n'êtes pas membre de ce tableau.",
-  INTROUVABLE: "Ce tableau n'existe plus.",
-}[e.message] || (e.message === "Failed to fetch" ? "Connexion impossible. Vérifiez votre réseau et l'URL du script." : e.message));
+const errText = (e) => ({ INTROUVABLE: "Ce tableau n'existe plus." }[e.message]
+  || (e.message === "Failed to fetch" ? "Connexion impossible. Vérifiez votre réseau et l'URL du script." : e.message));
 
 /* ============ Utilitaires ============ */
 const rnd = () => Math.random().toString(36).slice(2, 9) + Date.now().toString(36).slice(-4);
 let ID_SEQ = null;
 const uid = () => (ID_SEQ ? ID_SEQ() : rnd());
 const clone = (o) => JSON.parse(JSON.stringify(o));
-const norm = (e) => e.trim().toLowerCase();
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 // Une modification = une fonction rejouable : mêmes identifiants à chaque rejeu.
 function makeOp(fn, log, who) {
@@ -259,8 +216,8 @@ const fmtDay = (s) => new Date(s + "T00:00").toLocaleDateString("fr-FR", { day: 
 const fmtAgo = (t) => new Date(t).toLocaleString("fr-FR", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
 
 /* ============ Petits composants ============ */
-function Avatar({ name, email, size }) {
-  return <span className="av" title={name || email} style={{ background: colorOf(email || name), ...(size ? { width: size, height: size } : {}) }}>{initials(name || email)}</span>;
+function Avatar({ name, seed, size }) {
+  return <span className="av" title={name} style={{ background: colorOf(seed || name), ...(size ? { width: size, height: size } : {}) }}>{initials(name)}</span>;
 }
 function Confirm({ label, confirmLabel, onConfirm, className = "btn ghost" }) {
   const [armed, setArmed] = useState(false);
@@ -302,41 +259,14 @@ function Swatches({ colors, value, onPick, allowNone }) {
   );
 }
 
-/* ============ Connexion ============ */
-function Auth({ busy, message }) {
-  const btn = useRef(null);
-  useEffect(() => {
-    let alive = true;
-    initGoogle().then(() => {
-      if (!alive || !btn.current) return;
-      google.accounts.id.renderButton(btn.current, { theme: "filled_blue", size: "large", shape: "pill", text: "continue_with", locale: "fr", width: 280 });
-      google.accounts.id.prompt();
-    });
-    return () => { alive = false; };
-  }, []);
-  return (
-    <div className="auth">
-      <div className="auth-box">
-        <div className="blocks"><i style={{ background: "#2F6FD1" }} /><i style={{ background: "#2E9E6B", flex: 0.6 }} /><i style={{ background: "#E2B203", flex: 1.4 }} /></div>
-        <h1 className="disp">Tableaux</h1>
-        <p className="sub">{busy ? "Connexion en cours…" : "Connectez-vous avec votre compte Google pour retrouver vos projets."}</p>
-        <div ref={btn} style={{ minHeight: 44, display: busy ? "none" : "block" }} />
-        {message && <p className="err" role="alert">{message}</p>}
-        <p className="hint" style={{ marginTop: 16 }}>Aucun mot de passe n'est créé ni conservé. Seuls votre adresse e-mail et votre prénom servent à vous identifier dans les tableaux.</p>
-      </div>
-    </div>
-  );
-}
-
 /* ============ Accueil ============ */
-function Home({ user, toggleStar, setName, open, logout }) {
+function Home({ open }) {
   const [boards, setBoards] = useState(null);
   const [err, setErr] = useState("");
   const [creating, setCreating] = useState(false);
   const [busy, setBusy] = useState(false);
   const [nb, setNb] = useState({ name: "", color: BG[0] });
   const [q, setQ] = useState("");
-  const [panel, setPanel] = useState(null);
 
   const load = useCallback(async () => {
     try { const r = await api("listBoards"); setBoards(r.boards); setErr(""); } catch (e) { setErr(errText(e)); }
@@ -350,32 +280,33 @@ function Home({ user, toggleStar, setName, open, logout }) {
     catch (e) { setErr(errText(e)); }
     setBusy(false);
   };
+  const toggleStar = async (b) => {
+    setBoards((all) => all.map((x) => (x.id === b.id ? { ...x, starred: !b.starred } : x)));
+    try { await api("setStar", { id: b.id, starred: !b.starred }); } catch (e) { setErr(errText(e)); load(); }
+  };
 
   const shown = (boards || []).filter((b) => !q || b.name.toLowerCase().includes(q.toLowerCase()));
-  const starred = shown.filter((b) => user.stars.includes(b.id));
+  const starred = shown.filter((b) => b.starred);
   const tile = (b) => (
     <div key={b.id} style={{ position: "relative" }}>
       <button className="bt" style={{ background: b.color, width: "100%" }} onClick={() => open(b.id)}>
         <span className="nm">{b.name}</span>
-        <span className="who">{b.owner === user.email ? "Créé par vous" : `Partagé par ${b.ownerName}`}</span>
+        <span className="who">{b.updatedAt ? "Modifié le " + fmtAgo(b.updatedAt) : ""}</span>
       </button>
-      <button className="star" aria-label={user.stars.includes(b.id) ? "Retirer des favoris" : "Ajouter aux favoris"} onClick={() => toggleStar(b.id)}>{user.stars.includes(b.id) ? "★" : "☆"}</button>
+      <button className="star" aria-label={b.starred ? "Retirer des favoris" : "Ajouter aux favoris"} onClick={() => toggleStar(b)}>{b.starred ? "★" : "☆"}</button>
     </div>
   );
 
   return (
     <div>
-      <header className="home-hd">
-        <h1 className="disp">Tableaux</h1>
-        <button className="hchip" onClick={() => setPanel("account")}><span className="row"><Avatar name={user.name} email={user.email} size={20} />{user.name}</span></button>
-      </header>
+      <header className="home-hd"><h1 className="disp">Tableaux</h1></header>
       <main className="home">
         <input className="fld" placeholder="Rechercher un tableau" value={q} onChange={(e) => setQ(e.target.value)} />
         {err && <p className="err" role="alert">{err}</p>}
-        {boards === null ? <p className="empty">Chargement des tableaux…</p> : (
+        {boards === null ? <p className="empty">{err ? "" : "Chargement des tableaux…"}</p> : (
           <>
             {starred.length > 0 && <><h2>Favoris</h2><div className="grid">{starred.map(tile)}</div></>}
-            <h2>Vos tableaux</h2>
+            <h2>Tous les tableaux</h2>
             <div className="grid">
               {shown.map(tile)}
               {creating ? (
@@ -386,29 +317,16 @@ function Home({ user, toggleStar, setName, open, logout }) {
                 </div>
               ) : <button className="newb" onClick={() => setCreating(true)}>+ Créer un tableau</button>}
             </div>
-            {boards.length === 0 && <p className="hint">Chaque tableau est un projet indépendant. Créez le premier, puis invitez d'autres personnes par e-mail depuis le tableau.</p>}
+            {boards.length === 0 && <p className="hint">Chaque tableau est un projet indépendant, avec ses propres listes, cartes, étiquettes et membres.</p>}
           </>
         )}
       </main>
-
-      {panel === "account" && (
-        <Sheet title="Compte" onClose={() => setPanel(null)}>
-          <div className="sec">
-            <div className="mrow"><Avatar name={user.name} email={user.email} /><span>{user.name}<small>{user.email}</small></span></div>
-            <div className="sec">
-              <h4>Prénom affiché</h4>
-              <input className="fld" defaultValue={user.name} onBlur={(e) => { const v = e.target.value.trim(); if (v && v !== user.name) setName(v); }} />
-            </div>
-            <div className="sec"><button className="btn" onClick={logout}>Se déconnecter</button></div>
-          </div>
-        </Sheet>
-      )}
     </div>
   );
 }
 
 /* ============ Carte : vue détaillée ============ */
-function CardModal({ c, b, user, commit, close }) {
+function CardModal({ c, b, me, commit, close }) {
   const [title, setTitle] = useState(c.title);
   const [desc, setDesc] = useState(c.desc);
   const [comment, setComment] = useState("");
@@ -421,7 +339,7 @@ function CardModal({ c, b, user, commit, close }) {
 
   const addComment = () => {
     const t = comment.trim(); if (!t) return;
-    mut((x) => x.comments.push({ id: uid(), author: user.name, email: user.email, text: t, at: Date.now() }), `a commenté « ${c.title} »`);
+    mut((x) => x.comments.push({ id: uid(), author: me ? me.name : "Anonyme", memberId: me ? me.id : "", text: t, at: Date.now() }), `a commenté « ${c.title} »`);
     setComment("");
   };
   const addLink = () => {
@@ -453,10 +371,11 @@ function CardModal({ c, b, user, commit, close }) {
 
       <div className="sec">
         <h4>Membres</h4>
+        {b.members.length === 0 && <div className="empty">Ajoutez des membres depuis le bouton « Membres » du tableau.</div>}
         <div className="row">
           {b.members.map((m) => {
-            const on = c.members.includes(m.email);
-            return <button key={m.email} className={"tg" + (on ? " on" : "")} style={on ? { background: colorOf(m.email) } : {}} onClick={() => toggleIn("members", m.email)}>{m.name}</button>;
+            const on = c.members.includes(m.id);
+            return <button key={m.id} className={"tg" + (on ? " on" : "")} style={on ? { background: colorOf(m.id) } : {}} onClick={() => toggleIn("members", m.id)}>{m.name}</button>;
           })}
         </div>
       </div>
@@ -536,8 +455,8 @@ function CardModal({ c, b, user, commit, close }) {
         <h4>Commentaires</h4>
         {c.comments.map((m) => (
           <div key={m.id} className="cm">
-            <div className="cm-h"><Avatar name={m.author} email={m.email} size={22} /><b>{m.author}</b><time>{fmtAgo(m.at)}{m.edited ? " · modifié" : ""}</time>
-              {m.email === user.email && editCm?.id !== m.id && <>
+            <div className="cm-h"><Avatar name={m.author} seed={m.memberId} size={22} /><b>{m.author}</b><time>{fmtAgo(m.at)}{m.edited ? " · modifié" : ""}</time>
+              {editCm?.id !== m.id && <>
                 <button onClick={() => setEditCm({ id: m.id, text: m.text })}>Modifier</button>
                 <button onClick={() => mut((x) => (x.comments = x.comments.filter((y) => y.id !== m.id)))}>Supprimer</button>
               </>}
@@ -598,7 +517,7 @@ function CardTile({ c, b, onOpen, dragProps }) {
             {c.comments.length > 0 && <span>💬 {c.comments.length}</span>}
             {c.attachments.length > 0 && <span>🔗 {c.attachments.length}</span>}
             {items.length > 0 && <span className={dn === items.length ? "due done" : ""}>☑ {dn}/{items.length}</span>}
-            {c.members.length > 0 && <span className="avs">{c.members.map((e) => <Avatar key={e} email={e} name={b.members.find((m) => m.email === e)?.name} />)}</span>}
+            {c.members.length > 0 && <span className="avs">{c.members.map((mid) => <Avatar key={mid} seed={mid} name={b.members.find((m) => m.id === mid)?.name} />)}</span>}
           </div>
         ) : null}
       </div>
@@ -607,7 +526,7 @@ function CardTile({ c, b, onOpen, dragProps }) {
 }
 
 /* ============ Tableau ============ */
-function Board({ id, user, toggleStar, back }) {
+function Board({ id, back }) {
   const [b, setB] = useState(null);
   const [state, setState] = useState("loading");
   const [sync, setSync] = useState("ok");
@@ -617,6 +536,7 @@ function Board({ id, user, toggleStar, back }) {
   const [menu, setMenu] = useState(null);
   const [f, setF] = useState({ q: "", member: "", label: "", due: "" });
   const [drop, setDrop] = useState(null);
+  const [meId, setMeId] = useState(""); // « qui suis-je », gardé en mémoire uniquement
   const ref = useRef(null);       // état affiché
   const server = useRef(null);    // dernière version confirmée par le serveur
   const queue = useRef([]);       // modifications pas encore envoyées
@@ -627,10 +547,7 @@ function Board({ id, user, toggleStar, back }) {
   const dragList = useRef(null);
 
   const show = (x) => { ref.current = x; setB(x); };
-  const fail = (e) => {
-    if (e.message === "ACCES") setState("denied");
-    else if (e.message === "INTROUVABLE") setState("missing");
-  };
+  const fail = (e) => { if (e.message === "INTROUVABLE") setState("missing"); };
 
   const flush = async () => {
     clearTimeout(timer.current);
@@ -658,25 +575,23 @@ function Board({ id, user, toggleStar, back }) {
   };
   flushRef.current = flush;
 
+  const meRef = useRef("");
   const commit = useCallback((fn, log) => {
-    const op = makeOp(fn, log, user.name);
+    const who = ref.current?.members.find((m) => m.id === meRef.current)?.name || "";
+    const op = makeOp(fn, log, who);
     show(op(clone(ref.current)));
     queue.current.push(op);
     setSync("pending");
     clearTimeout(timer.current);
     timer.current = setTimeout(() => flushRef.current(), 700);
-  }, [user.name]);
+  }, []);
 
-  const reload = async () => {
-    const r = await api("getBoard", { id });
-    server.current = r.board; show(replay(r.board, queue.current));
-  };
 
   useEffect(() => {
     let alive = true;
     (async () => {
       try { const r = await api("getBoard", { id }); if (!alive) return; server.current = r.board; show(r.board); setState("ok"); }
-      catch (e) { if (!alive) return; fail(e); if (e.message !== "ACCES" && e.message !== "INTROUVABLE") setState("error:" + errText(e)); }
+      catch (e) { if (!alive) return; fail(e); if (e.message !== "INTROUVABLE") setState("error:" + errText(e)); }
     })();
     const t = setInterval(async () => {
       if (inflight.current || queue.current.length || !server.current) return;
@@ -697,13 +612,14 @@ function Board({ id, user, toggleStar, back }) {
   if (state === "loading") return <div className="auth"><div className="auth-box"><p className="sub" style={{ margin: 0 }}>Chargement du tableau…</p></div></div>;
   if (state !== "ok") return (
     <div className="auth"><div className="auth-box">
-      <h1 className="disp" style={{ fontSize: 26 }}>{state === "missing" ? "Ce tableau n'existe plus" : state === "denied" ? "Accès refusé" : "Chargement impossible"}</h1>
-      <p className="sub">{state === "missing" ? "Il a été supprimé par son créateur." : state === "denied" ? "Vous n'êtes pas membre de ce tableau. Demandez à son créateur de vous inviter avec votre adresse e-mail." : state.slice(6)}</p>
+      <h1 className="disp" style={{ fontSize: 26 }}>{state === "missing" ? "Ce tableau n'existe plus" : "Chargement impossible"}</h1>
+      <p className="sub">{state === "missing" ? "Il a été supprimé ou l'adresse est incomplète." : state.slice(6)}</p>
       <button className="btn" onClick={back}>Retour aux tableaux</button>
     </div></div>
   );
 
-  const isOwner = b.owner === user.email;
+  meRef.current = meId;
+  const me = b.members.find((m) => m.id === meId) || null;
   const activeLists = b.lists.filter((l) => !l.archived);
   const visible = (c) => {
     if (c.archived) return false;
@@ -759,8 +675,13 @@ function Board({ id, user, toggleStar, back }) {
         <button className="back" onClick={leave} aria-label="Retour à la liste des tableaux">‹ Tableaux</button>
         <input className="bd-name" key={b.name} defaultValue={b.name} aria-label="Nom du tableau"
           onBlur={(e) => { const v = e.target.value.trim(); if (v && v !== b.name) commit((bb) => { bb.name = v; return bb; }, `a renommé le tableau en « ${v} »`); }} />
-        <button className="star" onClick={() => toggleStar(id)} aria-label="Favori">{user.stars.includes(id) ? "★" : "☆"}</button>
-        <button className="back" onClick={() => setPanel("members")}><span className="avs">{b.members.slice(0, 4).map((m) => <Avatar key={m.email} name={m.name} email={m.email} size={22} />)}</span></button>
+        {b.members.length > 0 && (
+          <select className="who-sel" value={meId} onChange={(e) => setMeId(e.target.value)} aria-label="Qui êtes-vous ?">
+            <option value="">Qui êtes-vous ?</option>
+            {b.members.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+          </select>
+        )}
+        <button className="back" onClick={() => setPanel("members")}>{b.members.length ? <span className="avs">{b.members.slice(0, 4).map((m) => <Avatar key={m.id} name={m.name} seed={m.id} size={22} />)}</span> : "Membres"}</button>
       </header>
       <div className="tools">
         <button className={"tool" + (view === "board" ? " on" : "")} onClick={() => setView("board")}>Tableau</button>
@@ -768,7 +689,7 @@ function Board({ id, user, toggleStar, back }) {
         <input placeholder="Rechercher" value={f.q} onChange={(e) => setF({ ...f, q: e.target.value })} aria-label="Rechercher une carte" />
         <select value={f.member} onChange={(e) => setF({ ...f, member: e.target.value })} aria-label="Filtrer par membre">
           <option value="">Tous les membres</option>
-          {b.members.map((m) => <option key={m.email} value={m.email}>{m.email === user.email ? "Mes cartes" : m.name}</option>)}
+          {b.members.map((m) => <option key={m.id} value={m.id}>{m.id === meId ? "Mes cartes" : m.name}</option>)}
         </select>
         <select value={f.label} onChange={(e) => setF({ ...f, label: e.target.value })} aria-label="Filtrer par étiquette">
           <option value="">Toutes les étiquettes</option>
@@ -849,9 +770,9 @@ function Board({ id, user, toggleStar, back }) {
         <Agenda b={b} visible={visible} open={setOpenId} />
       )}
 
-      {openCard && <CardModal key={openCard.id} c={openCard} b={b} user={user} commit={commit} close={() => setOpenId(null)} />}
+      {openCard && <CardModal key={openCard.id} c={openCard} b={b} me={me} commit={commit} close={() => setOpenId(null)} />}
 
-      {panel === "members" && <MembersPanel b={b} user={user} isOwner={isOwner} reload={reload} leave={back} close={() => setPanel(null)} />}
+      {panel === "members" && <MembersPanel b={b} meId={meId} setMeId={setMeId} commit={commit} close={() => setPanel(null)} />}
 
       {panel === "labels" && (
         <Sheet title="Étiquettes" onClose={() => setPanel(null)}>
@@ -913,17 +834,17 @@ function Board({ id, user, toggleStar, back }) {
         <Sheet title="Activité" onClose={() => setPanel(null)}>
           <div className="sec">
             {(b.activity || []).length === 0 && <div className="empty">Aucune activité pour l'instant.</div>}
-            {(b.activity || []).map((a) => <div key={a.id} className="act"><b>{a.who}</b> {a.text}<time>{fmtAgo(a.at)}</time></div>)}
+            {(b.activity || []).map((a) => <div key={a.id} className="act">{a.who ? <b>{a.who}</b> : /^a /.test(a.text) ? <b>Quelqu'un</b> : null} {a.text}<time>{fmtAgo(a.at)}</time></div>)}
           </div>
         </Sheet>
       )}
 
-      {panel === "settings" && <SettingsPanel b={b} isOwner={isOwner} commit={commit} back={back} close={() => setPanel(null)} />}
+      {panel === "settings" && <SettingsPanel b={b} commit={commit} back={back} close={() => setPanel(null)} />}
     </div>
   );
 }
 
-function SettingsPanel({ b, isOwner, commit, back, close }) {
+function SettingsPanel({ b, commit, back, close }) {
   const [err, setErr] = useState("");
   return (
     <Sheet title="Paramètres du tableau" onClose={close}>
@@ -932,19 +853,20 @@ function SettingsPanel({ b, isOwner, commit, back, close }) {
         <Swatches colors={BG} value={b.color} onPick={(color) => commit((bb) => { bb.color = color; return bb; })} />
       </div>
       <div className="sec">
-        <h4>Créateur</h4>
-        <p style={{ margin: 0 }}>{b.members.find((m) => m.email === b.owner)?.name} ({b.owner})</p>
-      </div>
-      {isOwner && (
-        <div className="sec">
-          <h4>Supprimer le tableau</h4>
-          <Confirm label="Supprimer ce tableau" confirmLabel="Supprimer pour tous les membres" onConfirm={async () => {
-            try { await api("deleteBoard", { id: b.id }); back(); } catch (e) { setErr(errText(e)); }
-          }} />
-          <p className="hint">Ses lignes sont retirées du classeur. Les sauvegardes Excel déjà faites le conservent.</p>
-          {err && <p className="err">{err}</p>}
+        <h4>Lien direct vers ce tableau</h4>
+        <div className="inl">
+          <input className="fld" readOnly value={location.href} onFocus={(e) => e.target.select()} />
+          <button className="btn ghost" onClick={async () => { try { await navigator.clipboard.writeText(location.href); setErr("Lien copié."); } catch (e) { setErr("Sélectionnez le lien et copiez-le."); } }}>Copier</button>
         </div>
-      )}
+      </div>
+      <div className="sec">
+        <h4>Supprimer le tableau</h4>
+        <Confirm label="Supprimer ce tableau" confirmLabel="Supprimer définitivement" onConfirm={async () => {
+          try { await api("deleteBoard", { id: b.id }); back(); } catch (e) { setErr(errText(e)); }
+        }} />
+        <p className="hint">Ses lignes sont retirées du classeur. Les sauvegardes Excel déjà faites le conservent.</p>
+      </div>
+      {err && <p className="hint" role="status">{err}</p>}
     </Sheet>
   );
 }
@@ -975,100 +897,57 @@ function Agenda({ b, visible, open }) {
   );
 }
 
-function MembersPanel({ b, user, isOwner, reload, leave, close }) {
-  const [email, setEmail] = useState("");
-  const [msg, setMsg] = useState("");
-  const [busy, setBusy] = useState(false);
-  const invite = async () => {
-    const e = norm(email);
-    if (!EMAIL_RE.test(e)) return setMsg("Adresse e-mail invalide.");
-    setBusy(true);
-    try {
-      const r = await api("invite", { id: b.id, invite: e });
-      await reload(); setEmail("");
-      setMsg(r.hasAccount ? "Cette personne voit maintenant le tableau dans sa liste." : `Invitation enregistrée. ${e} verra ce tableau après avoir créé son compte avec cette adresse.`);
-    } catch (x) { setMsg(errText(x)); }
-    setBusy(false);
-  };
-  const remove = async (m) => {
-    const self = m.email === user.email;
-    try { await api("removeMember", { id: b.id, member: m.email }); if (self) leave(); else await reload(); }
-    catch (x) { setMsg(errText(x)); }
-  };
+function MembersPanel({ b, meId, setMeId, commit, close }) {
   return (
     <Sheet title="Membres" onClose={close}>
       <div className="sec">
+        {b.members.length === 0 && <div className="empty">Ajoutez les personnes qui participent à ce projet. Elles pourront être assignées aux cartes.</div>}
         {b.members.map((m) => (
-          <div key={m.email} className="mrow"><Avatar name={m.name} email={m.email} />
-            <span>{m.name}{m.email === user.email && " (vous)"}<small>{m.email}{m.email === b.owner ? " · créateur" : ""}</small></span>
-            {isOwner && m.email !== b.owner && <Confirm className="del" label="Retirer" confirmLabel="Retirer" onConfirm={() => remove(m)} />}
+          <div key={m.id} className="mrow"><Avatar name={m.name} seed={m.id} />
+            <span><input className="fld" key={m.name} defaultValue={m.name} aria-label="Nom du membre"
+              onBlur={(e) => { const v = e.target.value.trim(); if (v && v !== m.name) commit((bb) => { const x = bb.members.find((y) => y.id === m.id); if (x) x.name = v; return bb; }); }} /></span>
+            {m.id === meId ? <span className="n" style={{ flex: "0 0 auto" }}>c'est vous</span>
+              : <button className="btn ghost" onClick={() => setMeId(m.id)}>C'est moi</button>}
+            <Confirm className="del" label="Retirer" confirmLabel="Retirer" onConfirm={() => {
+              if (m.id === meId) setMeId("");
+              commit((bb) => {
+                bb.members = bb.members.filter((x) => x.id !== m.id);
+                Object.values(bb.cards).forEach((c) => (c.members = c.members.filter((x) => x !== m.id)));
+                return bb;
+              }, `a retiré ${m.name}`);
+            }} />
           </div>
         ))}
       </div>
-      {isOwner ? (
-        <div className="sec">
-          <h4>Inviter par e-mail</h4>
-          <div className="inl"><input className="fld" type="email" placeholder="adresse@exemple.com" value={email} onChange={(e) => setEmail(e.target.value)} onKeyDown={(e) => e.key === "Enter" && invite()} />
-            <button className="btn" onClick={invite} disabled={busy}>{busy ? "…" : "Inviter"}</button></div>
-          <p className="hint">Aucun e-mail n'est envoyé : transmettez l'adresse de la page. La personne se connecte avec cette adresse et ne voit que les tableaux auxquels elle est invitée.</p>
-        </div>
-      ) : (
-        <div className="sec">
-          <p className="hint">Seul le créateur du tableau peut inviter ou retirer des membres.</p>
-          <Confirm label="Quitter ce tableau" confirmLabel="Quitter" onConfirm={() => remove(b.members.find((m) => m.email === user.email))} />
-        </div>
-      )}
-      {msg && <p className="hint" role="status">{msg}</p>}
+      <div className="sec">
+        <h4>Ajouter un membre</h4>
+        <AddInput placeholder="Prénom ou nom" blurAdds={false} onAdd={(name) => commit((bb) => { bb.members.push({ id: uid(), name }); return bb; }, `a ajouté ${name}`)} />
+        <p className="hint">« C'est moi » sert à signer vos commentaires et l'historique. Ce choix n'est enregistré nulle part : il est à refaire à chaque ouverture de la page.</p>
+      </div>
     </Sheet>
   );
 }
 
 /* ============ Application ============ */
 function App() {
-  const [user, setUser] = useState(null);
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState("");
   const [boardId, setBoardId] = useState(() => new URLSearchParams(location.hash.slice(1)).get("t"));
-  const userRef = useRef(null);
-  userRef.current = user;
 
+  // L'adresse garde le tableau ouvert (#t=…) : on peut actualiser ou partager le lien d'un tableau
+  useEffect(() => { history.replaceState(null, "", boardId ? "#t=" + boardId : location.pathname + location.search); }, [boardId]);
   useEffect(() => {
-    const onCred = async () => {
-      if (userRef.current) return; // simple renouvellement du jeton
-      setBusy(true); setMsg("");
-      try { const r = await api("me"); setUser(r.user); }
-      catch (e) { setMsg(errText(e)); }
-      setBusy(false);
-    };
-    const onSession = () => { ID_TOKEN = null; setUser(null); setMsg("Votre connexion Google a expiré. Reconnectez-vous."); };
-    window.addEventListener("tb-credential", onCred);
-    window.addEventListener("tb-session", onSession);
-    return () => { window.removeEventListener("tb-credential", onCred); window.removeEventListener("tb-session", onSession); };
+    const onHash = () => setBoardId(new URLSearchParams(location.hash.slice(1)).get("t"));
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
   }, []);
 
-  // L'adresse garde le tableau ouvert (#t=…) pour pouvoir actualiser la page
-  useEffect(() => { history.replaceState(null, "", boardId ? "#t=" + boardId : location.pathname + location.search); }, [boardId]);
-
-  const logout = () => {
-    try { google.accounts.id.disableAutoSelect(); } catch (e) {}
-    ID_TOKEN = null; setUser(null); setBoardId(null); setMsg("");
-  };
-  const toggleStar = async (id) => {
-    const stars = user.stars.includes(id) ? user.stars.filter((x) => x !== id) : [...user.stars, id];
-    setUser({ ...user, stars });
-    try { const r = await api("setStars", { stars }); setUser(r.user); } catch (e) {}
-  };
-  const setName = async (name) => { try { const r = await api("setName", { name }); setUser(r.user); } catch (e) {} };
-
-  if (!API_URL || !GOOGLE_CLIENT_ID) return (
+  if (!API_URL) return (
     <div className="auth"><div className="auth-box">
       <h1 className="disp" style={{ fontSize: 26 }}>Configuration incomplète</h1>
-      <p className="sub">Renseignez API_URL et GOOGLE_CLIENT_ID en haut du script de index.html, puis republiez la page.</p>
+      <p className="sub">Renseignez API_URL en haut du script de index.html avec l'URL /exec de votre script Apps Script, puis republiez la page.</p>
     </div></div>
   );
-  if (!user) return <Auth busy={busy} message={msg} />;
-  if (boardId) return <Board key={boardId} id={boardId} user={user} toggleStar={toggleStar} back={() => setBoardId(null)} />;
-  return <Home user={user} toggleStar={toggleStar} setName={setName} open={setBoardId} logout={logout} />;
+  if (boardId) return <Board key={boardId} id={boardId} back={() => setBoardId(null)} />;
+  return <Home open={setBoardId} />;
 }
 
 ReactDOM.createRoot(document.getElementById("root")).render(<App />);
