@@ -6,6 +6,9 @@
 <meta name="theme-color" content="#1B2440">
 <meta name="robots" content="noindex, nofollow">
 <title>Tableaux</title>
+<link rel="preconnect" href="https://script.google.com">
+<link rel="preconnect" href="https://script.googleusercontent.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <style>
 html,body{margin:0;padding:0}
 
@@ -149,59 +152,125 @@ textarea.ttl:focus{background:#fff;outline:1.5px solid var(--ink)}
 .who-sel{border:0;border-radius:8px;padding:6px 8px;font-size:13.5px;background:rgba(255,255,255,.92);max-width:150px}
 .mrow span .fld{padding:6px 8px}
 </style>
-<script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js" crossorigin></script>
-<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js" crossorigin></script>
-<script src="https://unpkg.com/@babel/standalone@7.25.6/babel.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js" crossorigin></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js" crossorigin></script>
 </head>
 <body>
 <div id="root" class="tb"><div style="padding:24px;font-family:system-ui">Chargement…</div></div>
-<script type="text/babel" data-presets="react">
-
-const { useState, useEffect, useRef, useCallback } = React;
+<script>
+/* Code compilé à l'avance (plus de compilation dans le navigateur).
+   Pour changer d'URL de script, modifiez la ligne API_URL ci-dessous. */
+function _extends() { return _extends = Object.assign ? Object.assign.bind() : function (n) { for (var e = 1; e < arguments.length; e++) { var t = arguments[e]; for (var r in t) ({}).hasOwnProperty.call(t, r) && (n[r] = t[r]); } return n; }, _extends.apply(null, arguments); }
+const {
+  useState,
+  useEffect,
+  useRef,
+  useCallback
+} = React;
 
 /* ============ Configuration ============ */
 // URL /exec de votre déploiement Apps Script
 const API_URL = "https://script.google.com/macros/s/AKfycbwEfS5sLWYM7Mrckdzi-lO_m-3G8xCnNmvI37yNTi2FDV1XjypBwifBX42gvthRMxCiEw/exec";
-
-async function api(action, data = {}) {
-  const res = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action, ...data }) });
+async function api(action) {
+  let data = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : {};
+  const res = await fetch(API_URL, {
+    method: "POST",
+    body: JSON.stringify({
+      action,
+      ...data
+    })
+  });
   if (!res.ok) throw new Error("Le serveur ne répond pas (" + res.status + ").");
   const j = await res.json();
   if (j.error) throw new Error(j.error);
   return j;
 }
-const errText = (e) => ({ INTROUVABLE: "Ce tableau n'existe plus." }[e.message]
-  || (e.message === "Failed to fetch" ? "Connexion impossible. Vérifiez votre réseau et l'URL du script." : e.message));
+// Copie locale du dernier état connu : affichage immédiat, puis mise à jour depuis Sheets
+const local = {
+  get(k) {
+    try {
+      const v = localStorage.getItem("tb:" + k);
+      return v ? JSON.parse(v) : null;
+    } catch (e) {
+      return null;
+    }
+  },
+  set(k, v) {
+    try {
+      localStorage.setItem("tb:" + k, JSON.stringify(v));
+    } catch (e) {}
+  },
+  del(k) {
+    try {
+      localStorage.removeItem("tb:" + k);
+    } catch (e) {}
+  }
+};
+const creating = {}; // tableaux créés, en cours d'envoi au classeur
+// Réveille le script dès l'ouverture de la page (le premier appel Apps Script est le plus lent)
+const warm = fetch(API_URL, {
+  method: "POST",
+  body: JSON.stringify({
+    action: "listBoards"
+  })
+}).then(r => r.json()).catch(() => null);
+const errText = e => ({
+  INTROUVABLE: "Ce tableau n'existe plus."
+})[e.message] || (e.message === "Failed to fetch" ? "Connexion impossible. Vérifiez votre réseau et l'URL du script." : e.message);
 
 /* ============ Utilitaires ============ */
 const rnd = () => Math.random().toString(36).slice(2, 9) + Date.now().toString(36).slice(-4);
 let ID_SEQ = null;
-const uid = () => (ID_SEQ ? ID_SEQ() : rnd());
-const clone = (o) => JSON.parse(JSON.stringify(o));
+const uid = () => ID_SEQ ? ID_SEQ() : rnd();
+const clone = o => JSON.parse(JSON.stringify(o));
 
 // Une modification = une fonction rejouable : mêmes identifiants à chaque rejeu.
 function makeOp(fn, log, who) {
-  const seed = rnd(), at = Date.now();
-  return (bb) => {
+  const seed = rnd(),
+    at = Date.now();
+  return bb => {
     let n = 0;
     ID_SEQ = () => seed + "-" + (n++).toString(36);
     try {
       const r = fn(bb) || bb;
-      if (log) r.activity = [{ id: seed + "-log", at, who, text: log }, ...(r.activity || [])].slice(0, 200);
+      if (log) r.activity = [{
+        id: seed + "-log",
+        at,
+        who,
+        text: log
+      }, ...(r.activity || [])].slice(0, 200);
       return r;
-    } finally { ID_SEQ = null; }
+    } finally {
+      ID_SEQ = null;
+    }
   };
 }
-const replay = (base, ops) => ops.reduce((bb, op) => { try { return op(bb); } catch (e) { return bb; } }, clone(base));
-
+const replay = (base, ops) => ops.reduce((bb, op) => {
+  try {
+    return op(bb);
+  } catch (e) {
+    return bb;
+  }
+}, clone(base));
 const PALETTE = ["#2E9E6B", "#E2B203", "#E07B24", "#D9443B", "#8A5CC7", "#2F6FD1", "#2BA3C4", "#7AA83A", "#D3539B", "#4A4F5C"];
 const BG = ["#2F6FD1", "#2E9E6B", "#8A5CC7", "#D9443B", "#E07B24", "#2BA3C4", "#D3539B", "#4A4F5C"];
-const colorOf = (s) => PALETTE[[...(s || "")].reduce((a, ch) => a + ch.charCodeAt(0), 0) % PALETTE.length];
-const initials = (n) => (n || "?").split(/[\s@._-]+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join("").toUpperCase();
-
-const newCard = (title) => ({
-  id: uid(), title, desc: "", labels: [], members: [], start: "", due: "", dueDone: false,
-  checklists: [], comments: [], attachments: [], cover: "", archived: false, createdAt: Date.now(),
+const colorOf = s => PALETTE[[...(s || "")].reduce((a, ch) => a + ch.charCodeAt(0), 0) % PALETTE.length];
+const initials = n => (n || "?").split(/[\s@._-]+/).filter(Boolean).slice(0, 2).map(w => w[0]).join("").toUpperCase();
+const newCard = title => ({
+  id: uid(),
+  title,
+  desc: "",
+  labels: [],
+  members: [],
+  start: "",
+  due: "",
+  dueDone: false,
+  checklists: [],
+  comments: [],
+  attachments: [],
+  cover: "",
+  archived: false,
+  createdAt: Date.now()
 });
 function dueState(c) {
   if (!c.due) return null;
@@ -211,356 +280,854 @@ function dueState(c) {
   if (d < 86400000) return "soon";
   return "later";
 }
-const fmtDue = (s) => new Date(s).toLocaleString("fr-FR", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
-const fmtDay = (s) => new Date(s + "T00:00").toLocaleDateString("fr-FR", { day: "numeric", month: "short" });
-const fmtAgo = (t) => new Date(t).toLocaleString("fr-FR", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+const fmtDue = s => new Date(s).toLocaleString("fr-FR", {
+  day: "numeric",
+  month: "short",
+  hour: "2-digit",
+  minute: "2-digit"
+});
+const fmtDay = s => new Date(s + "T00:00").toLocaleDateString("fr-FR", {
+  day: "numeric",
+  month: "short"
+});
+const fmtAgo = t => new Date(t).toLocaleString("fr-FR", {
+  day: "numeric",
+  month: "short",
+  hour: "2-digit",
+  minute: "2-digit"
+});
 
 /* ============ Petits composants ============ */
-function Avatar({ name, seed, size }) {
-  return <span className="av" title={name} style={{ background: colorOf(seed || name), ...(size ? { width: size, height: size } : {}) }}>{initials(name)}</span>;
+function Avatar(_ref) {
+  let {
+    name,
+    seed,
+    size
+  } = _ref;
+  return /*#__PURE__*/React.createElement("span", {
+    className: "av",
+    title: name,
+    style: {
+      background: colorOf(seed || name),
+      ...(size ? {
+        width: size,
+        height: size
+      } : {})
+    }
+  }, initials(name));
 }
-function Confirm({ label, confirmLabel, onConfirm, className = "btn ghost" }) {
+function Confirm(_ref2) {
+  let {
+    label,
+    confirmLabel,
+    onConfirm,
+    className = "btn ghost"
+  } = _ref2;
   const [armed, setArmed] = useState(false);
-  return armed ? (
-    <span className="row">
-      <button className="btn warn" onClick={() => { setArmed(false); onConfirm(); }}>{confirmLabel}</button>
-      <button className="btn ghost" onClick={() => setArmed(false)}>Annuler</button>
-    </span>
-  ) : <button className={className} onClick={() => setArmed(true)}>{label}</button>;
+  return armed ? /*#__PURE__*/React.createElement("span", {
+    className: "row"
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn warn",
+    onClick: () => {
+      setArmed(false);
+      onConfirm();
+    }
+  }, confirmLabel), /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost",
+    onClick: () => setArmed(false)
+  }, "Annuler")) : /*#__PURE__*/React.createElement("button", {
+    className: className,
+    onClick: () => setArmed(true)
+  }, label);
 }
-function AddInput({ placeholder, onAdd, className = "fld", blurAdds = true }) {
+function AddInput(_ref3) {
+  let {
+    placeholder,
+    onAdd,
+    className = "fld",
+    blurAdds = true
+  } = _ref3;
   const [v, setV] = useState("");
-  const go = () => { if (v.trim()) { onAdd(v.trim()); setV(""); } };
-  return <input className={className} value={v} placeholder={placeholder} onChange={(e) => setV(e.target.value)}
-    onKeyDown={(e) => { if (e.key === "Enter") go(); if (e.key === "Escape") setV(""); }} onBlur={() => blurAdds && go()} />;
+  const go = () => {
+    if (v.trim()) {
+      onAdd(v.trim());
+      setV("");
+    }
+  };
+  return /*#__PURE__*/React.createElement("input", {
+    className: className,
+    value: v,
+    placeholder: placeholder,
+    onChange: e => setV(e.target.value),
+    onKeyDown: e => {
+      if (e.key === "Enter") go();
+      if (e.key === "Escape") setV("");
+    },
+    onBlur: () => blurAdds && go()
+  });
 }
-function Sheet({ title, onClose, cover, children }) {
-  useEffect(() => { const k = (e) => e.key === "Escape" && onClose(); window.addEventListener("keydown", k); return () => window.removeEventListener("keydown", k); }, [onClose]);
-  return (
-    <div className="ov" onClick={onClose}>
-      <div className="sheet" role="dialog" aria-label={typeof title === "string" ? title : "Détails"} onClick={(e) => e.stopPropagation()}>
-        {cover && <div className="cv" style={{ background: cover }} />}
-        <div className="sh-in">
-          {typeof title === "string" ? (
-            <div className="sh-top"><h2 className="ttl">{title}</h2><button className="x" onClick={onClose} aria-label="Fermer">×</button></div>
-          ) : title}
-          {children}
-        </div>
-      </div>
-    </div>
-  );
+function Sheet(_ref4) {
+  let {
+    title,
+    onClose,
+    cover,
+    children
+  } = _ref4;
+  useEffect(() => {
+    const k = e => e.key === "Escape" && onClose();
+    window.addEventListener("keydown", k);
+    return () => window.removeEventListener("keydown", k);
+  }, [onClose]);
+  return /*#__PURE__*/React.createElement("div", {
+    className: "ov",
+    onClick: onClose
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "sheet",
+    role: "dialog",
+    "aria-label": typeof title === "string" ? title : "Détails",
+    onClick: e => e.stopPropagation()
+  }, cover && /*#__PURE__*/React.createElement("div", {
+    className: "cv",
+    style: {
+      background: cover
+    }
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "sh-in"
+  }, typeof title === "string" ? /*#__PURE__*/React.createElement("div", {
+    className: "sh-top"
+  }, /*#__PURE__*/React.createElement("h2", {
+    className: "ttl"
+  }, title), /*#__PURE__*/React.createElement("button", {
+    className: "x",
+    onClick: onClose,
+    "aria-label": "Fermer"
+  }, "\xD7")) : title, children)));
 }
-function Swatches({ colors, value, onPick, allowNone }) {
-  return (
-    <div className="sw-row">
-      {allowNone && <button className={"swatch" + (!value ? " on" : "")} style={{ background: "#fff", border: "1.5px solid rgba(27,36,64,.2)" }} onClick={() => onPick("")} aria-label="Aucune" />}
-      {colors.map((c) => <button key={c} className={"swatch" + (value === c ? " on" : "")} style={{ background: c }} onClick={() => onPick(c)} aria-label={"Couleur " + c} />)}
-    </div>
-  );
+function Swatches(_ref5) {
+  let {
+    colors,
+    value,
+    onPick,
+    allowNone
+  } = _ref5;
+  return /*#__PURE__*/React.createElement("div", {
+    className: "sw-row"
+  }, allowNone && /*#__PURE__*/React.createElement("button", {
+    className: "swatch" + (!value ? " on" : ""),
+    style: {
+      background: "#fff",
+      border: "1.5px solid rgba(27,36,64,.2)"
+    },
+    onClick: () => onPick(""),
+    "aria-label": "Aucune"
+  }), colors.map(c => /*#__PURE__*/React.createElement("button", {
+    key: c,
+    className: "swatch" + (value === c ? " on" : ""),
+    style: {
+      background: c
+    },
+    onClick: () => onPick(c),
+    "aria-label": "Couleur " + c
+  })));
 }
 
 /* ============ Accueil ============ */
-function Home({ open }) {
-  const [boards, setBoards] = useState(null);
+function Home(_ref6) {
+  let {
+    open
+  } = _ref6;
+  const [boards, setBoards] = useState(() => local.get("list"));
   const [err, setErr] = useState("");
   const [creating, setCreating] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [nb, setNb] = useState({ name: "", color: BG[0] });
+  const [nb, setNb] = useState({
+    name: "",
+    color: BG[0]
+  });
   const [q, setQ] = useState("");
-
-  const load = useCallback(async () => {
-    try { const r = await api("listBoards"); setBoards(r.boards); setErr(""); } catch (e) { setErr(errText(e)); }
+  const apply = list => {
+    const pend = Object.values(creating).map(x => x.summary).filter(x => !list.some(y => y.id === x.id));
+    const all = [...list, ...pend];
+    local.set("list", all);
+    setBoards(all);
+    setErr("");
+  };
+  const load = useCallback(async first => {
+    try {
+      const r = first ? (await warm) || (await api("listBoards")) : await api("listBoards");
+      if (r.error) throw new Error(r.error);
+      apply(r.boards);
+    } catch (e) {
+      if (!local.get("list")) setErr(errText(e));
+    }
   }, []);
-  useEffect(() => { load(); const t = setInterval(load, 30000); return () => clearInterval(t); }, [load]);
+  useEffect(() => {
+    load(true);
+    const t = setInterval(() => load(false), 30000);
+    return () => clearInterval(t);
+  }, [load]);
 
-  const create = async () => {
-    if (!nb.name.trim() || busy) return;
-    setBusy(true);
-    try { const r = await api("createBoard", { name: nb.name.trim(), color: nb.color }); setCreating(false); setNb({ name: "", color: BG[0] }); open(r.id); }
-    catch (e) { setErr(errText(e)); }
-    setBusy(false);
+  // Le tableau est préparé ici et ouvert tout de suite ; l'envoi au classeur se fait en arrière-plan
+  const create = () => {
+    const name = nb.name.trim();
+    if (!name) return;
+    const id = rnd() + rnd().slice(0, 4);
+    const board = {
+      id,
+      name,
+      color: nb.color,
+      starred: false,
+      version: 0,
+      createdAt: Date.now(),
+      members: [],
+      labels: PALETTE.slice(0, 6).map(color => ({
+        id: rnd(),
+        name: "",
+        color
+      })),
+      lists: ["À faire", "En cours", "Terminé"].map(n => ({
+        id: rnd(),
+        name: n,
+        archived: false,
+        cardIds: []
+      })),
+      cards: {},
+      activity: [{
+        id: rnd(),
+        at: Date.now(),
+        who: "",
+        text: "Tableau créé"
+      }]
+    };
+    const summary = {
+      id,
+      name,
+      color: nb.color,
+      starred: false,
+      updatedAt: Date.now()
+    };
+    const promise = api("createBoard", {
+      board
+    }).then(r => {
+      board.version = r.version || 1;
+      local.set("b:" + id, board);
+      return r;
+    }).finally(() => delete creating[id]);
+    creating[id] = {
+      board,
+      summary,
+      promise
+    };
+    local.set("b:" + id, board);
+    local.set("list", [...(boards || []), summary]);
+    setCreating(false);
+    setNb({
+      name: "",
+      color: BG[0]
+    });
+    open(id);
   };
-  const toggleStar = async (b) => {
-    setBoards((all) => all.map((x) => (x.id === b.id ? { ...x, starred: !b.starred } : x)));
-    try { await api("setStar", { id: b.id, starred: !b.starred }); } catch (e) { setErr(errText(e)); load(); }
+  const toggleStar = async b => {
+    setBoards(all => {
+      const n = all.map(x => x.id === b.id ? {
+        ...x,
+        starred: !b.starred
+      } : x);
+      local.set("list", n);
+      return n;
+    });
+    try {
+      await api("setStar", {
+        id: b.id,
+        starred: !b.starred
+      });
+    } catch (e) {
+      setErr(errText(e));
+      load();
+    }
   };
-
-  const shown = (boards || []).filter((b) => !q || b.name.toLowerCase().includes(q.toLowerCase()));
-  const starred = shown.filter((b) => b.starred);
-  const tile = (b) => (
-    <div key={b.id} style={{ position: "relative" }}>
-      <button className="bt" style={{ background: b.color, width: "100%" }} onClick={() => open(b.id)}>
-        <span className="nm">{b.name}</span>
-        <span className="who">{b.updatedAt ? "Modifié le " + fmtAgo(b.updatedAt) : ""}</span>
-      </button>
-      <button className="star" aria-label={b.starred ? "Retirer des favoris" : "Ajouter aux favoris"} onClick={() => toggleStar(b)}>{b.starred ? "★" : "☆"}</button>
-    </div>
-  );
-
-  return (
-    <div>
-      <header className="home-hd"><h1 className="disp">Tableaux</h1></header>
-      <main className="home">
-        <input className="fld" placeholder="Rechercher un tableau" value={q} onChange={(e) => setQ(e.target.value)} />
-        {err && <p className="err" role="alert">{err}</p>}
-        {boards === null ? <p className="empty">{err ? "" : "Chargement des tableaux…"}</p> : (
-          <>
-            {starred.length > 0 && <><h2>Favoris</h2><div className="grid">{starred.map(tile)}</div></>}
-            <h2>Tous les tableaux</h2>
-            <div className="grid">
-              {shown.map(tile)}
-              {creating ? (
-                <div className="newb">
-                  <input className="fld" autoFocus placeholder="Nom du tableau" value={nb.name} onChange={(e) => setNb({ ...nb, name: e.target.value })} onKeyDown={(e) => e.key === "Enter" && create()} />
-                  <Swatches colors={BG} value={nb.color} onPick={(color) => setNb({ ...nb, color })} />
-                  <div className="row"><button className="btn" onClick={create} disabled={!nb.name.trim() || busy}>{busy ? "Création…" : "Créer"}</button><button className="btn ghost" onClick={() => setCreating(false)}>Annuler</button></div>
-                </div>
-              ) : <button className="newb" onClick={() => setCreating(true)}>+ Créer un tableau</button>}
-            </div>
-            {boards.length === 0 && <p className="hint">Chaque tableau est un projet indépendant, avec ses propres listes, cartes, étiquettes et membres.</p>}
-          </>
-        )}
-      </main>
-    </div>
-  );
+  const shown = (boards || []).filter(b => !q || b.name.toLowerCase().includes(q.toLowerCase()));
+  const starred = shown.filter(b => b.starred);
+  const tile = b => /*#__PURE__*/React.createElement("div", {
+    key: b.id,
+    style: {
+      position: "relative"
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "bt",
+    style: {
+      background: b.color,
+      width: "100%"
+    },
+    onClick: () => open(b.id)
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "nm"
+  }, b.name), /*#__PURE__*/React.createElement("span", {
+    className: "who"
+  }, b.updatedAt ? "Modifié le " + fmtAgo(b.updatedAt) : "")), /*#__PURE__*/React.createElement("button", {
+    className: "star",
+    "aria-label": b.starred ? "Retirer des favoris" : "Ajouter aux favoris",
+    onClick: () => toggleStar(b)
+  }, b.starred ? "★" : "☆"));
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("header", {
+    className: "home-hd"
+  }, /*#__PURE__*/React.createElement("h1", {
+    className: "disp"
+  }, "Tableaux")), /*#__PURE__*/React.createElement("main", {
+    className: "home"
+  }, /*#__PURE__*/React.createElement("input", {
+    className: "fld",
+    placeholder: "Rechercher un tableau",
+    value: q,
+    onChange: e => setQ(e.target.value)
+  }), err && /*#__PURE__*/React.createElement("p", {
+    className: "err",
+    role: "alert"
+  }, err), boards === null ? /*#__PURE__*/React.createElement("p", {
+    className: "empty"
+  }, err ? "" : "Chargement des tableaux…") : /*#__PURE__*/React.createElement(React.Fragment, null, starred.length > 0 && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("h2", null, "Favoris"), /*#__PURE__*/React.createElement("div", {
+    className: "grid"
+  }, starred.map(tile))), /*#__PURE__*/React.createElement("h2", null, "Tous les tableaux"), /*#__PURE__*/React.createElement("div", {
+    className: "grid"
+  }, shown.map(tile), creating ? /*#__PURE__*/React.createElement("div", {
+    className: "newb"
+  }, /*#__PURE__*/React.createElement("input", {
+    className: "fld",
+    autoFocus: true,
+    placeholder: "Nom du tableau",
+    value: nb.name,
+    onChange: e => setNb({
+      ...nb,
+      name: e.target.value
+    }),
+    onKeyDown: e => e.key === "Enter" && create()
+  }), /*#__PURE__*/React.createElement(Swatches, {
+    colors: BG,
+    value: nb.color,
+    onPick: color => setNb({
+      ...nb,
+      color
+    })
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "row"
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn",
+    onClick: create,
+    disabled: !nb.name.trim()
+  }, "Cr\xE9er"), /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost",
+    onClick: () => setCreating(false)
+  }, "Annuler"))) : /*#__PURE__*/React.createElement("button", {
+    className: "newb",
+    onClick: () => setCreating(true)
+  }, "+ Cr\xE9er un tableau")), boards.length === 0 && /*#__PURE__*/React.createElement("p", {
+    className: "hint"
+  }, "Chaque tableau est un projet ind\xE9pendant, avec ses propres listes, cartes, \xE9tiquettes et membres."))));
 }
 
 /* ============ Carte : vue détaillée ============ */
-function CardModal({ c, b, me, commit, close }) {
+function CardModal(_ref7) {
+  let {
+    c,
+    b,
+    me,
+    commit,
+    close
+  } = _ref7;
   const [title, setTitle] = useState(c.title);
   const [desc, setDesc] = useState(c.desc);
   const [comment, setComment] = useState("");
   const [editCm, setEditCm] = useState(null);
-  const [link, setLink] = useState({ name: "", url: "" });
-  const listId = b.lists.find((l) => l.cardIds.includes(c.id))?.id;
-  const mut = (f, log) => commit((bb) => { const x = bb.cards[c.id]; if (x) f(x, bb); return bb; }, log);
-  const toggleIn = (key, v) => mut((x) => { x[key] = x[key].includes(v) ? x[key].filter((y) => y !== v) : [...x[key], v]; });
+  const [link, setLink] = useState({
+    name: "",
+    url: ""
+  });
+  const listId = b.lists.find(l => l.cardIds.includes(c.id))?.id;
+  const mut = (f, log) => commit(bb => {
+    const x = bb.cards[c.id];
+    if (x) f(x, bb);
+    return bb;
+  }, log);
+  const toggleIn = (key, v) => mut(x => {
+    x[key] = x[key].includes(v) ? x[key].filter(y => y !== v) : [...x[key], v];
+  });
   const ds = dueState(c);
-
   const addComment = () => {
-    const t = comment.trim(); if (!t) return;
-    mut((x) => x.comments.push({ id: uid(), author: me ? me.name : "Anonyme", memberId: me ? me.id : "", text: t, at: Date.now() }), `a commenté « ${c.title} »`);
+    const t = comment.trim();
+    if (!t) return;
+    mut(x => x.comments.push({
+      id: uid(),
+      author: me ? me.name : "Anonyme",
+      memberId: me ? me.id : "",
+      text: t,
+      at: Date.now()
+    }), `a commenté « ${c.title} »`);
     setComment("");
   };
   const addLink = () => {
-    let url = link.url.trim(); if (!url) return;
+    let url = link.url.trim();
+    if (!url) return;
     if (!/^https?:\/\//i.test(url)) url = "https://" + url;
     const name = link.name.trim() || url;
-    mut((x) => x.attachments.push({ id: uid(), name, url }));
-    setLink({ name: "", url: "" });
+    mut(x => x.attachments.push({
+      id: uid(),
+      name,
+      url
+    }));
+    setLink({
+      name: "",
+      url: ""
+    });
   };
-
-  return (
-    <Sheet cover={c.cover} onClose={close} title={
-      <div className="sh-top">
-        <textarea className="ttl" rows={2} value={title} onChange={(e) => setTitle(e.target.value)} onBlur={() => { const t = title.trim(); if (t && t !== c.title) mut((x) => (x.title = t)); }} aria-label="Titre de la carte" />
-        <button className="x" onClick={close} aria-label="Fermer">×</button>
-      </div>
-    }>
-      {c.archived && <p className="err">Cette carte est archivée.</p>}
-      <div className="sec">
-        <h4>Liste</h4>
-        <select className="fld" value={listId || ""} onChange={(e) => {
-          const to = e.target.value;
-          mut((x, bb) => { const t = bb.lists.find((l) => l.id === to); if (!t) return; bb.lists.forEach((l) => (l.cardIds = l.cardIds.filter((i) => i !== x.id))); t.cardIds.push(x.id); },
-            `a déplacé « ${c.title} » vers « ${b.lists.find((l) => l.id === to)?.name} »`);
-        }}>
-          {b.lists.filter((l) => !l.archived).map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
-        </select>
-      </div>
-
-      <div className="sec">
-        <h4>Membres</h4>
-        {b.members.length === 0 && <div className="empty">Ajoutez des membres depuis le bouton « Membres » du tableau.</div>}
-        <div className="row">
-          {b.members.map((m) => {
-            const on = c.members.includes(m.id);
-            return <button key={m.id} className={"tg" + (on ? " on" : "")} style={on ? { background: colorOf(m.id) } : {}} onClick={() => toggleIn("members", m.id)}>{m.name}</button>;
-          })}
-        </div>
-      </div>
-
-      <div className="sec">
-        <h4>Étiquettes</h4>
-        <div className="row">
-          {b.labels.map((l) => {
-            const on = c.labels.includes(l.id);
-            return <button key={l.id} className={"tg" + (on ? " on" : "")} style={on ? { background: l.color } : { borderColor: l.color }} onClick={() => toggleIn("labels", l.id)}>{l.name || "\u00a0\u00a0\u00a0\u00a0"}</button>;
-          })}
-        </div>
-        <p className="hint">Renommez ou créez des étiquettes dans le menu « Étiquettes » du tableau.</p>
-      </div>
-
-      <div className="sec two">
-        <div><h4>Début</h4><input type="date" className="fld" value={c.start} onChange={(e) => { const v = e.target.value; mut((x) => (x.start = v)); }} /></div>
-        <div><h4>Échéance</h4><input type="datetime-local" className="fld" value={c.due} onChange={(e) => { const v = e.target.value; mut((x) => { x.due = v; if (!v) x.dueDone = false; }); }} /></div>
-      </div>
-      {c.due && (
-        <label className="ci" style={{ marginTop: 6 }}>
-          <input type="checkbox" checked={c.dueDone} onChange={() => { const v = !c.dueDone; mut((x) => (x.dueDone = v), `a marqué « ${c.title} » comme ${v ? "terminée" : "non terminée"}`); }} />
-          <span>Terminée {ds === "late" && <b style={{ color: "var(--red)" }}>· en retard</b>}{ds === "soon" && <b style={{ color: "#9a7a00" }}>· bientôt</b>}</span>
-        </label>
-      )}
-
-      <div className="sec">
-        <h4>Couverture</h4>
-        <Swatches colors={PALETTE} value={c.cover} allowNone onPick={(v) => mut((x) => (x.cover = v))} />
-      </div>
-
-      <div className="sec">
-        <h4>Description</h4>
-        <textarea className="fld" rows={4} value={desc} placeholder="Ajoutez une description plus détaillée…" onChange={(e) => setDesc(e.target.value)} onBlur={() => desc !== c.desc && mut((x) => (x.desc = desc))} />
-      </div>
-
-      <div className="sec">
-        <h4>Checklists</h4>
-        {c.checklists.map((k) => {
-          const dn = k.items.filter((i) => i.done).length;
-          const pct = k.items.length ? Math.round((dn / k.items.length) * 100) : 0;
-          return (
-            <div key={k.id} className="cl">
-              <div className="cl-h"><span>{k.title}</span>
-                <Confirm className="del" label="Supprimer" confirmLabel="Supprimer" onConfirm={() => mut((x) => (x.checklists = x.checklists.filter((y) => y.id !== k.id)))} />
-              </div>
-              {k.items.length > 0 && <div className="prog">{pct} %<div><i style={{ width: pct + "%" }} /></div></div>}
-              {k.items.map((i) => (
-                <label key={i.id} className={"ci" + (i.done ? " d" : "")}>
-                  <input type="checkbox" checked={i.done} onChange={() => { const v = !i.done; mut((x) => { const it = x.checklists.find((y) => y.id === k.id)?.items.find((y) => y.id === i.id); if (it) it.done = v; }); }} />
-                  <span>{i.text}</span>
-                  <button className="del" aria-label="Supprimer l'élément" onClick={(e) => { e.preventDefault(); mut((x) => { const cl = x.checklists.find((y) => y.id === k.id); if (cl) cl.items = cl.items.filter((y) => y.id !== i.id); }); }}>×</button>
-                </label>
-              ))}
-              <AddInput placeholder="Ajouter un élément" onAdd={(text) => mut((x) => x.checklists.find((y) => y.id === k.id)?.items.push({ id: uid(), text, done: false }))} />
-            </div>
-          );
-        })}
-        <AddInput placeholder="+ Nouvelle checklist (nom)" blurAdds={false} onAdd={(t) => mut((x) => x.checklists.push({ id: uid(), title: t, items: [] }))} />
-      </div>
-
-      <div className="sec">
-        <h4>Liens joints</h4>
-        {c.attachments.map((a) => (
-          <div key={a.id} className="att"><a href={a.url} target="_blank" rel="noopener noreferrer">{a.name}</a>
-            <button className="del" aria-label="Retirer le lien" onClick={() => mut((x) => (x.attachments = x.attachments.filter((y) => y.id !== a.id)))}>×</button>
-          </div>
-        ))}
-        <div className="two">
-          <input className="fld" placeholder="Nom (facultatif)" value={link.name} onChange={(e) => setLink({ ...link, name: e.target.value })} />
-          <input className="fld" placeholder="https://…" value={link.url} onChange={(e) => setLink({ ...link, url: e.target.value })} onKeyDown={(e) => e.key === "Enter" && addLink()} />
-        </div>
-        {link.url.trim() && <button className="btn" style={{ marginTop: 8 }} onClick={addLink}>Joindre le lien</button>}
-      </div>
-
-      <div className="sec">
-        <h4>Commentaires</h4>
-        {c.comments.map((m) => (
-          <div key={m.id} className="cm">
-            <div className="cm-h"><Avatar name={m.author} seed={m.memberId} size={22} /><b>{m.author}</b><time>{fmtAgo(m.at)}{m.edited ? " · modifié" : ""}</time>
-              {editCm?.id !== m.id && <>
-                <button onClick={() => setEditCm({ id: m.id, text: m.text })}>Modifier</button>
-                <button onClick={() => mut((x) => (x.comments = x.comments.filter((y) => y.id !== m.id)))}>Supprimer</button>
-              </>}
-            </div>
-            {editCm?.id === m.id ? (
-              <div className="inl"><input className="fld" value={editCm.text} onChange={(e) => setEditCm({ ...editCm, text: e.target.value })} />
-                <button className="btn" onClick={() => { const t = editCm.text.trim(); if (t) mut((x) => { const y = x.comments.find((z) => z.id === m.id); if (y) { y.text = t; y.edited = true; } }); setEditCm(null); }}>Enregistrer</button>
-              </div>
-            ) : <div style={{ whiteSpace: "pre-wrap" }}>{m.text}</div>}
-          </div>
-        ))}
-        <div className="inl">
-          <input className="fld" value={comment} placeholder="Écrire un commentaire…" onChange={(e) => setComment(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addComment()} />
-          <button className="btn" onClick={addComment}>Envoyer</button>
-        </div>
-      </div>
-
-      <div className="sec">
-        <h4>Actions</h4>
-        <div className="row">
-          <button className="btn ghost" onClick={() => commit((bb) => {
-            const src = bb.cards[c.id]; if (!src) return bb;
-            const cp = { ...clone(src), id: uid(), title: src.title + " (copie)", comments: [], createdAt: Date.now() };
-            cp.checklists.forEach((k) => { k.id = uid(); k.items.forEach((i) => (i.id = uid())); });
-            cp.attachments.forEach((a) => (a.id = uid()));
-            bb.cards[cp.id] = cp;
-            const l = bb.lists.find((x) => x.cardIds.includes(c.id));
-            if (l) l.cardIds.splice(l.cardIds.indexOf(c.id) + 1, 0, cp.id);
-            return bb;
-          }, `a copié « ${c.title} »`)}>Copier la carte</button>
-          <button className="btn ghost" onClick={() => { const v = !c.archived; mut((x) => (x.archived = v), `a ${v ? "archivé" : "restauré"} « ${c.title} »`); if (v) close(); }}>{c.archived ? "Restaurer" : "Archiver"}</button>
-          <Confirm label="Supprimer" confirmLabel="Supprimer définitivement" onConfirm={() => {
-            commit((bb) => { bb.lists.forEach((l) => (l.cardIds = l.cardIds.filter((i) => i !== c.id))); delete bb.cards[c.id]; return bb; }, `a supprimé « ${c.title} »`);
-            close();
-          }} />
-        </div>
-      </div>
-    </Sheet>
-  );
+  return /*#__PURE__*/React.createElement(Sheet, {
+    cover: c.cover,
+    onClose: close,
+    title: /*#__PURE__*/React.createElement("div", {
+      className: "sh-top"
+    }, /*#__PURE__*/React.createElement("textarea", {
+      className: "ttl",
+      rows: 2,
+      value: title,
+      onChange: e => setTitle(e.target.value),
+      onBlur: () => {
+        const t = title.trim();
+        if (t && t !== c.title) mut(x => x.title = t);
+      },
+      "aria-label": "Titre de la carte"
+    }), /*#__PURE__*/React.createElement("button", {
+      className: "x",
+      onClick: close,
+      "aria-label": "Fermer"
+    }, "\xD7"))
+  }, c.archived && /*#__PURE__*/React.createElement("p", {
+    className: "err"
+  }, "Cette carte est archiv\xE9e."), /*#__PURE__*/React.createElement("div", {
+    className: "sec"
+  }, /*#__PURE__*/React.createElement("h4", null, "Liste"), /*#__PURE__*/React.createElement("select", {
+    className: "fld",
+    value: listId || "",
+    onChange: e => {
+      const to = e.target.value;
+      mut((x, bb) => {
+        const t = bb.lists.find(l => l.id === to);
+        if (!t) return;
+        bb.lists.forEach(l => l.cardIds = l.cardIds.filter(i => i !== x.id));
+        t.cardIds.push(x.id);
+      }, `a déplacé « ${c.title} » vers « ${b.lists.find(l => l.id === to)?.name} »`);
+    }
+  }, b.lists.filter(l => !l.archived).map(l => /*#__PURE__*/React.createElement("option", {
+    key: l.id,
+    value: l.id
+  }, l.name)))), /*#__PURE__*/React.createElement("div", {
+    className: "sec"
+  }, /*#__PURE__*/React.createElement("h4", null, "Membres"), b.members.length === 0 && /*#__PURE__*/React.createElement("div", {
+    className: "empty"
+  }, "Ajoutez des membres depuis le bouton \xAB Membres \xBB du tableau."), /*#__PURE__*/React.createElement("div", {
+    className: "row"
+  }, b.members.map(m => {
+    const on = c.members.includes(m.id);
+    return /*#__PURE__*/React.createElement("button", {
+      key: m.id,
+      className: "tg" + (on ? " on" : ""),
+      style: on ? {
+        background: colorOf(m.id)
+      } : {},
+      onClick: () => toggleIn("members", m.id)
+    }, m.name);
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "sec"
+  }, /*#__PURE__*/React.createElement("h4", null, "\xC9tiquettes"), /*#__PURE__*/React.createElement("div", {
+    className: "row"
+  }, b.labels.map(l => {
+    const on = c.labels.includes(l.id);
+    return /*#__PURE__*/React.createElement("button", {
+      key: l.id,
+      className: "tg" + (on ? " on" : ""),
+      style: on ? {
+        background: l.color
+      } : {
+        borderColor: l.color
+      },
+      onClick: () => toggleIn("labels", l.id)
+    }, l.name || "\u00a0\u00a0\u00a0\u00a0");
+  })), /*#__PURE__*/React.createElement("p", {
+    className: "hint"
+  }, "Renommez ou cr\xE9ez des \xE9tiquettes dans le menu \xAB \xC9tiquettes \xBB du tableau.")), /*#__PURE__*/React.createElement("div", {
+    className: "sec two"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("h4", null, "D\xE9but"), /*#__PURE__*/React.createElement("input", {
+    type: "date",
+    className: "fld",
+    value: c.start,
+    onChange: e => {
+      const v = e.target.value;
+      mut(x => x.start = v);
+    }
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("h4", null, "\xC9ch\xE9ance"), /*#__PURE__*/React.createElement("input", {
+    type: "datetime-local",
+    className: "fld",
+    value: c.due,
+    onChange: e => {
+      const v = e.target.value;
+      mut(x => {
+        x.due = v;
+        if (!v) x.dueDone = false;
+      });
+    }
+  }))), c.due && /*#__PURE__*/React.createElement("label", {
+    className: "ci",
+    style: {
+      marginTop: 6
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "checkbox",
+    checked: c.dueDone,
+    onChange: () => {
+      const v = !c.dueDone;
+      mut(x => x.dueDone = v, `a marqué « ${c.title} » comme ${v ? "terminée" : "non terminée"}`);
+    }
+  }), /*#__PURE__*/React.createElement("span", null, "Termin\xE9e ", ds === "late" && /*#__PURE__*/React.createElement("b", {
+    style: {
+      color: "var(--red)"
+    }
+  }, "\xB7 en retard"), ds === "soon" && /*#__PURE__*/React.createElement("b", {
+    style: {
+      color: "#9a7a00"
+    }
+  }, "\xB7 bient\xF4t"))), /*#__PURE__*/React.createElement("div", {
+    className: "sec"
+  }, /*#__PURE__*/React.createElement("h4", null, "Couverture"), /*#__PURE__*/React.createElement(Swatches, {
+    colors: PALETTE,
+    value: c.cover,
+    allowNone: true,
+    onPick: v => mut(x => x.cover = v)
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "sec"
+  }, /*#__PURE__*/React.createElement("h4", null, "Description"), /*#__PURE__*/React.createElement("textarea", {
+    className: "fld",
+    rows: 4,
+    value: desc,
+    placeholder: "Ajoutez une description plus d\xE9taill\xE9e\u2026",
+    onChange: e => setDesc(e.target.value),
+    onBlur: () => desc !== c.desc && mut(x => x.desc = desc)
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "sec"
+  }, /*#__PURE__*/React.createElement("h4", null, "Checklists"), c.checklists.map(k => {
+    const dn = k.items.filter(i => i.done).length;
+    const pct = k.items.length ? Math.round(dn / k.items.length * 100) : 0;
+    return /*#__PURE__*/React.createElement("div", {
+      key: k.id,
+      className: "cl"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "cl-h"
+    }, /*#__PURE__*/React.createElement("span", null, k.title), /*#__PURE__*/React.createElement(Confirm, {
+      className: "del",
+      label: "Supprimer",
+      confirmLabel: "Supprimer",
+      onConfirm: () => mut(x => x.checklists = x.checklists.filter(y => y.id !== k.id))
+    })), k.items.length > 0 && /*#__PURE__*/React.createElement("div", {
+      className: "prog"
+    }, pct, " %", /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("i", {
+      style: {
+        width: pct + "%"
+      }
+    }))), k.items.map(i => /*#__PURE__*/React.createElement("label", {
+      key: i.id,
+      className: "ci" + (i.done ? " d" : "")
+    }, /*#__PURE__*/React.createElement("input", {
+      type: "checkbox",
+      checked: i.done,
+      onChange: () => {
+        const v = !i.done;
+        mut(x => {
+          const it = x.checklists.find(y => y.id === k.id)?.items.find(y => y.id === i.id);
+          if (it) it.done = v;
+        });
+      }
+    }), /*#__PURE__*/React.createElement("span", null, i.text), /*#__PURE__*/React.createElement("button", {
+      className: "del",
+      "aria-label": "Supprimer l'\xE9l\xE9ment",
+      onClick: e => {
+        e.preventDefault();
+        mut(x => {
+          const cl = x.checklists.find(y => y.id === k.id);
+          if (cl) cl.items = cl.items.filter(y => y.id !== i.id);
+        });
+      }
+    }, "\xD7"))), /*#__PURE__*/React.createElement(AddInput, {
+      placeholder: "Ajouter un \xE9l\xE9ment",
+      onAdd: text => mut(x => x.checklists.find(y => y.id === k.id)?.items.push({
+        id: uid(),
+        text,
+        done: false
+      }))
+    }));
+  }), /*#__PURE__*/React.createElement(AddInput, {
+    placeholder: "+ Nouvelle checklist (nom)",
+    blurAdds: false,
+    onAdd: t => mut(x => x.checklists.push({
+      id: uid(),
+      title: t,
+      items: []
+    }))
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "sec"
+  }, /*#__PURE__*/React.createElement("h4", null, "Liens joints"), c.attachments.map(a => /*#__PURE__*/React.createElement("div", {
+    key: a.id,
+    className: "att"
+  }, /*#__PURE__*/React.createElement("a", {
+    href: a.url,
+    target: "_blank",
+    rel: "noopener noreferrer"
+  }, a.name), /*#__PURE__*/React.createElement("button", {
+    className: "del",
+    "aria-label": "Retirer le lien",
+    onClick: () => mut(x => x.attachments = x.attachments.filter(y => y.id !== a.id))
+  }, "\xD7"))), /*#__PURE__*/React.createElement("div", {
+    className: "two"
+  }, /*#__PURE__*/React.createElement("input", {
+    className: "fld",
+    placeholder: "Nom (facultatif)",
+    value: link.name,
+    onChange: e => setLink({
+      ...link,
+      name: e.target.value
+    })
+  }), /*#__PURE__*/React.createElement("input", {
+    className: "fld",
+    placeholder: "https://\u2026",
+    value: link.url,
+    onChange: e => setLink({
+      ...link,
+      url: e.target.value
+    }),
+    onKeyDown: e => e.key === "Enter" && addLink()
+  })), link.url.trim() && /*#__PURE__*/React.createElement("button", {
+    className: "btn",
+    style: {
+      marginTop: 8
+    },
+    onClick: addLink
+  }, "Joindre le lien")), /*#__PURE__*/React.createElement("div", {
+    className: "sec"
+  }, /*#__PURE__*/React.createElement("h4", null, "Commentaires"), c.comments.map(m => /*#__PURE__*/React.createElement("div", {
+    key: m.id,
+    className: "cm"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "cm-h"
+  }, /*#__PURE__*/React.createElement(Avatar, {
+    name: m.author,
+    seed: m.memberId,
+    size: 22
+  }), /*#__PURE__*/React.createElement("b", null, m.author), /*#__PURE__*/React.createElement("time", null, fmtAgo(m.at), m.edited ? " · modifié" : ""), editCm?.id !== m.id && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("button", {
+    onClick: () => setEditCm({
+      id: m.id,
+      text: m.text
+    })
+  }, "Modifier"), /*#__PURE__*/React.createElement("button", {
+    onClick: () => mut(x => x.comments = x.comments.filter(y => y.id !== m.id))
+  }, "Supprimer"))), editCm?.id === m.id ? /*#__PURE__*/React.createElement("div", {
+    className: "inl"
+  }, /*#__PURE__*/React.createElement("input", {
+    className: "fld",
+    value: editCm.text,
+    onChange: e => setEditCm({
+      ...editCm,
+      text: e.target.value
+    })
+  }), /*#__PURE__*/React.createElement("button", {
+    className: "btn",
+    onClick: () => {
+      const t = editCm.text.trim();
+      if (t) mut(x => {
+        const y = x.comments.find(z => z.id === m.id);
+        if (y) {
+          y.text = t;
+          y.edited = true;
+        }
+      });
+      setEditCm(null);
+    }
+  }, "Enregistrer")) : /*#__PURE__*/React.createElement("div", {
+    style: {
+      whiteSpace: "pre-wrap"
+    }
+  }, m.text))), /*#__PURE__*/React.createElement("div", {
+    className: "inl"
+  }, /*#__PURE__*/React.createElement("input", {
+    className: "fld",
+    value: comment,
+    placeholder: "\xC9crire un commentaire\u2026",
+    onChange: e => setComment(e.target.value),
+    onKeyDown: e => e.key === "Enter" && addComment()
+  }), /*#__PURE__*/React.createElement("button", {
+    className: "btn",
+    onClick: addComment
+  }, "Envoyer"))), /*#__PURE__*/React.createElement("div", {
+    className: "sec"
+  }, /*#__PURE__*/React.createElement("h4", null, "Actions"), /*#__PURE__*/React.createElement("div", {
+    className: "row"
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost",
+    onClick: () => commit(bb => {
+      const src = bb.cards[c.id];
+      if (!src) return bb;
+      const cp = {
+        ...clone(src),
+        id: uid(),
+        title: src.title + " (copie)",
+        comments: [],
+        createdAt: Date.now()
+      };
+      cp.checklists.forEach(k => {
+        k.id = uid();
+        k.items.forEach(i => i.id = uid());
+      });
+      cp.attachments.forEach(a => a.id = uid());
+      bb.cards[cp.id] = cp;
+      const l = bb.lists.find(x => x.cardIds.includes(c.id));
+      if (l) l.cardIds.splice(l.cardIds.indexOf(c.id) + 1, 0, cp.id);
+      return bb;
+    }, `a copié « ${c.title} »`)
+  }, "Copier la carte"), /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost",
+    onClick: () => {
+      const v = !c.archived;
+      mut(x => x.archived = v, `a ${v ? "archivé" : "restauré"} « ${c.title} »`);
+      if (v) close();
+    }
+  }, c.archived ? "Restaurer" : "Archiver"), /*#__PURE__*/React.createElement(Confirm, {
+    label: "Supprimer",
+    confirmLabel: "Supprimer d\xE9finitivement",
+    onConfirm: () => {
+      commit(bb => {
+        bb.lists.forEach(l => l.cardIds = l.cardIds.filter(i => i !== c.id));
+        delete bb.cards[c.id];
+        return bb;
+      }, `a supprimé « ${c.title} »`);
+      close();
+    }
+  }))));
 }
 
 /* ============ Vignette de carte ============ */
-function CardTile({ c, b, onOpen, dragProps }) {
-  const items = c.checklists.flatMap((k) => k.items);
-  const dn = items.filter((i) => i.done).length;
+function CardTile(_ref8) {
+  let {
+    c,
+    b,
+    onOpen,
+    dragProps
+  } = _ref8;
+  const items = c.checklists.flatMap(k => k.items);
+  const dn = items.filter(i => i.done).length;
   const ds = dueState(c);
-  return (
-    <button className="cd" onClick={onOpen} {...dragProps}>
-      {c.cover && <div className="cv" style={{ background: c.cover }} />}
-      <div className="in">
-        {c.labels.length > 0 && <div className="pills">{c.labels.map((id) => { const l = b.labels.find((x) => x.id === id); return l && <span key={id} className="pill" style={{ background: l.color }}>{l.name}</span>; })}</div>}
-        <div className="ct">{c.title}</div>
-        {(c.due || c.start || items.length || c.comments.length || c.attachments.length || c.desc || c.members.length) ? (
-          <div className="badges">
-            {c.start && !c.due && <span>Début {fmtDay(c.start)}</span>}
-            {c.due && <span className={"due " + ds}>{ds === "done" ? "✓ " : ""}{fmtDue(c.due)}</span>}
-            {c.desc && <span title="Description">≡</span>}
-            {c.comments.length > 0 && <span>💬 {c.comments.length}</span>}
-            {c.attachments.length > 0 && <span>🔗 {c.attachments.length}</span>}
-            {items.length > 0 && <span className={dn === items.length ? "due done" : ""}>☑ {dn}/{items.length}</span>}
-            {c.members.length > 0 && <span className="avs">{c.members.map((mid) => <Avatar key={mid} seed={mid} name={b.members.find((m) => m.id === mid)?.name} />)}</span>}
-          </div>
-        ) : null}
-      </div>
-    </button>
-  );
+  return /*#__PURE__*/React.createElement("button", _extends({
+    className: "cd",
+    onClick: onOpen
+  }, dragProps), c.cover && /*#__PURE__*/React.createElement("div", {
+    className: "cv",
+    style: {
+      background: c.cover
+    }
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "in"
+  }, c.labels.length > 0 && /*#__PURE__*/React.createElement("div", {
+    className: "pills"
+  }, c.labels.map(id => {
+    const l = b.labels.find(x => x.id === id);
+    return l && /*#__PURE__*/React.createElement("span", {
+      key: id,
+      className: "pill",
+      style: {
+        background: l.color
+      }
+    }, l.name);
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "ct"
+  }, c.title), c.due || c.start || items.length || c.comments.length || c.attachments.length || c.desc || c.members.length ? /*#__PURE__*/React.createElement("div", {
+    className: "badges"
+  }, c.start && !c.due && /*#__PURE__*/React.createElement("span", null, "D\xE9but ", fmtDay(c.start)), c.due && /*#__PURE__*/React.createElement("span", {
+    className: "due " + ds
+  }, ds === "done" ? "✓ " : "", fmtDue(c.due)), c.desc && /*#__PURE__*/React.createElement("span", {
+    title: "Description"
+  }, "\u2261"), c.comments.length > 0 && /*#__PURE__*/React.createElement("span", null, "\uD83D\uDCAC ", c.comments.length), c.attachments.length > 0 && /*#__PURE__*/React.createElement("span", null, "\uD83D\uDD17 ", c.attachments.length), items.length > 0 && /*#__PURE__*/React.createElement("span", {
+    className: dn === items.length ? "due done" : ""
+  }, "\u2611 ", dn, "/", items.length), c.members.length > 0 && /*#__PURE__*/React.createElement("span", {
+    className: "avs"
+  }, c.members.map(mid => /*#__PURE__*/React.createElement(Avatar, {
+    key: mid,
+    seed: mid,
+    name: b.members.find(m => m.id === mid)?.name
+  })))) : null));
 }
 
 /* ============ Tableau ============ */
-function Board({ id, back }) {
-  const [b, setB] = useState(null);
-  const [state, setState] = useState("loading");
-  const [sync, setSync] = useState("ok");
+function Board(_ref9) {
+  let {
+    id,
+    back
+  } = _ref9;
+  const cached = useRef(creating[id]?.board || local.get("b:" + id));
+  const [b, setB] = useState(cached.current);
+  const [state, setState] = useState(cached.current ? "ok" : "loading");
+  const [sync, setSync] = useState(cached.current ? "loading" : "ok");
   const [openId, setOpenId] = useState(null);
   const [panel, setPanel] = useState(null);
   const [view, setView] = useState("board");
   const [menu, setMenu] = useState(null);
-  const [f, setF] = useState({ q: "", member: "", label: "", due: "" });
+  const [f, setF] = useState({
+    q: "",
+    member: "",
+    label: "",
+    due: ""
+  });
   const [drop, setDrop] = useState(null);
   const [meId, setMeId] = useState(""); // « qui suis-je », gardé en mémoire uniquement
-  const ref = useRef(null);       // état affiché
-  const server = useRef(null);    // dernière version confirmée par le serveur
-  const queue = useRef([]);       // modifications pas encore envoyées
+  const ref = useRef(null); // état affiché
+  const server = useRef(null); // dernière version confirmée par le serveur
+  const queue = useRef([]); // modifications pas encore envoyées
   const inflight = useRef(false);
   const timer = useRef(null);
   const flushRef = useRef(null);
   const dragCard = useRef(null);
   const dragList = useRef(null);
-
-  const show = (x) => { ref.current = x; setB(x); };
-  const fail = (e) => { if (e.message === "INTROUVABLE") setState("missing"); };
-
+  if (!ref.current && cached.current) ref.current = cached.current;
+  const show = x => {
+    ref.current = x;
+    setB(x);
+  };
+  const confirm = x => {
+    server.current = x;
+    local.set("b:" + id, x);
+  };
+  const fail = e => {
+    if (e.message === "INTROUVABLE") setState("missing");
+  };
   const flush = async () => {
     clearTimeout(timer.current);
     if (inflight.current || !queue.current.length || !server.current) return;
-    inflight.current = true; setSync("saving");
+    inflight.current = true;
+    setSync("saving");
     const ops = queue.current.splice(0);
     let base = server.current;
     try {
-      for (let attempt = 0; ; attempt++) {
+      for (let attempt = 0;; attempt++) {
         const toSend = replay(base, ops);
-        const r = await api("saveBoard", { id, board: toSend, baseVersion: base.version });
-        if (r.ok) { server.current = { ...toSend, version: r.version }; break; }
-        if (r.conflict && attempt < 3) { base = r.board; continue; }
+        const r = await api("saveBoard", {
+          id,
+          board: toSend,
+          baseVersion: base.version
+        });
+        if (r.ok) {
+          confirm({
+            ...toSend,
+            version: r.version
+          });
+          break;
+        }
+        if (r.conflict && attempt < 3) {
+          base = r.board;
+          continue;
+        }
         throw new Error("Trop de modifications simultanées, nouvel essai.");
       }
       show(replay(server.current, queue.current));
@@ -570,14 +1137,15 @@ function Board({ id, back }) {
       queue.current = [...ops, ...queue.current];
       setSync("error");
       timer.current = setTimeout(() => flushRef.current(), 8000);
-    } finally { inflight.current = false; }
+    } finally {
+      inflight.current = false;
+    }
     if (queue.current.length) timer.current = setTimeout(() => flushRef.current(), 400);
   };
   flushRef.current = flush;
-
   const meRef = useRef("");
   const commit = useCallback((fn, log) => {
-    const who = ref.current?.members.find((m) => m.id === meRef.current)?.name || "";
+    const who = ref.current?.members.find(m => m.id === meRef.current)?.name || "";
     const op = makeOp(fn, log, who);
     show(op(clone(ref.current)));
     queue.current.push(op);
@@ -585,43 +1153,93 @@ function Board({ id, back }) {
     clearTimeout(timer.current);
     timer.current = setTimeout(() => flushRef.current(), 700);
   }, []);
-
-
   useEffect(() => {
     let alive = true;
     (async () => {
-      try { const r = await api("getBoard", { id }); if (!alive) return; server.current = r.board; show(r.board); setState("ok"); }
-      catch (e) { if (!alive) return; fail(e); if (e.message !== "INTROUVABLE") setState("error:" + errText(e)); }
+      try {
+        if (creating[id]) await creating[id].promise;
+        const c = local.get("b:" + id);
+        const r = await api("getBoard", {
+          id,
+          version: c && c.version
+        });
+        if (!alive) return;
+        const fresh = r.unchanged ? c : r.board;
+        confirm(fresh);
+        show(replay(fresh, queue.current));
+        setState("ok");
+        if (queue.current.length) flushRef.current();else setSync("ok");
+      } catch (e) {
+        if (!alive) return;
+        fail(e);
+        if (e.message === "INTROUVABLE") local.del("b:" + id);else if (!cached.current) setState("error:" + errText(e));else setSync("error");
+      }
     })();
     const t = setInterval(async () => {
       if (inflight.current || queue.current.length || !server.current) return;
       try {
-        const r = await api("getBoard", { id, version: server.current.version });
-        if (r.board && !inflight.current && !queue.current.length) { server.current = r.board; show(r.board); }
-      } catch (e) { fail(e); }
+        const r = await api("getBoard", {
+          id,
+          version: server.current.version
+        });
+        if (r.board && !inflight.current && !queue.current.length) {
+          confirm(r.board);
+          show(r.board);
+        }
+      } catch (e) {
+        fail(e);
+      }
     }, 15000);
     const vis = () => document.visibilityState === "hidden" && flushRef.current();
-    const unload = (e) => { if (queue.current.length || inflight.current) { e.preventDefault(); e.returnValue = ""; } };
+    const unload = e => {
+      if (queue.current.length || inflight.current) {
+        e.preventDefault();
+        e.returnValue = "";
+      }
+    };
     document.addEventListener("visibilitychange", vis);
     window.addEventListener("beforeunload", unload);
-    return () => { alive = false; clearInterval(t); clearTimeout(timer.current); document.removeEventListener("visibilitychange", vis); window.removeEventListener("beforeunload", unload); };
+    return () => {
+      alive = false;
+      clearInterval(t);
+      clearTimeout(timer.current);
+      document.removeEventListener("visibilitychange", vis);
+      window.removeEventListener("beforeunload", unload);
+    };
   }, [id]);
-
-  const leave = async () => { await flushRef.current(); back(); };
-
-  if (state === "loading") return <div className="auth"><div className="auth-box"><p className="sub" style={{ margin: 0 }}>Chargement du tableau…</p></div></div>;
-  if (state !== "ok") return (
-    <div className="auth"><div className="auth-box">
-      <h1 className="disp" style={{ fontSize: 26 }}>{state === "missing" ? "Ce tableau n'existe plus" : "Chargement impossible"}</h1>
-      <p className="sub">{state === "missing" ? "Il a été supprimé ou l'adresse est incomplète." : state.slice(6)}</p>
-      <button className="btn" onClick={back}>Retour aux tableaux</button>
-    </div></div>
-  );
-
+  const leave = async () => {
+    await flushRef.current();
+    back();
+  };
+  if (state === "loading") return /*#__PURE__*/React.createElement("div", {
+    className: "auth"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "auth-box"
+  }, /*#__PURE__*/React.createElement("p", {
+    className: "sub",
+    style: {
+      margin: 0
+    }
+  }, "Chargement du tableau\u2026")));
+  if (state !== "ok") return /*#__PURE__*/React.createElement("div", {
+    className: "auth"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "auth-box"
+  }, /*#__PURE__*/React.createElement("h1", {
+    className: "disp",
+    style: {
+      fontSize: 26
+    }
+  }, state === "missing" ? "Ce tableau n'existe plus" : "Chargement impossible"), /*#__PURE__*/React.createElement("p", {
+    className: "sub"
+  }, state === "missing" ? "Il a été supprimé ou l'adresse est incomplète." : state.slice(6)), /*#__PURE__*/React.createElement("button", {
+    className: "btn",
+    onClick: back
+  }, "Retour aux tableaux")));
   meRef.current = meId;
-  const me = b.members.find((m) => m.id === meId) || null;
-  const activeLists = b.lists.filter((l) => !l.archived);
-  const visible = (c) => {
+  const me = b.members.find(m => m.id === meId) || null;
+  const activeLists = b.lists.filter(l => !l.archived);
+  const visible = c => {
     if (c.archived) return false;
     if (f.q && !(c.title + " " + c.desc).toLowerCase().includes(f.q.toLowerCase())) return false;
     if (f.member && !c.members.includes(f.member)) return false;
@@ -633,299 +1251,655 @@ function Board({ id, back }) {
     return true;
   };
   const filtering = f.q || f.member || f.label || f.due;
-
   const moveCard = (cardId, listId, beforeId) => {
-    const card = b.cards[cardId]; const to = b.lists.find((l) => l.id === listId);
-    const from = b.lists.find((l) => l.cardIds.includes(cardId));
-    commit((bb) => {
-      const t = bb.lists.find((l) => l.id === listId); if (!t || !bb.cards[cardId]) return bb;
-      bb.lists.forEach((l) => (l.cardIds = l.cardIds.filter((x) => x !== cardId)));
+    const card = b.cards[cardId];
+    const to = b.lists.find(l => l.id === listId);
+    const from = b.lists.find(l => l.cardIds.includes(cardId));
+    commit(bb => {
+      const t = bb.lists.find(l => l.id === listId);
+      if (!t || !bb.cards[cardId]) return bb;
+      bb.lists.forEach(l => l.cardIds = l.cardIds.filter(x => x !== cardId));
       const i = beforeId ? t.cardIds.indexOf(beforeId) : -1;
-      if (i >= 0) t.cardIds.splice(i, 0, cardId); else t.cardIds.push(cardId);
+      if (i >= 0) t.cardIds.splice(i, 0, cardId);else t.cardIds.push(cardId);
       return bb;
     }, from && to && from.id !== to.id ? `a déplacé « ${card?.title} » vers « ${to.name} »` : null);
   };
-  const moveList = (listId, beforeId) => commit((bb) => {
-    const l = bb.lists.find((x) => x.id === listId); if (!l) return bb;
-    bb.lists = bb.lists.filter((x) => x.id !== listId);
-    const i = bb.lists.findIndex((x) => x.id === beforeId);
-    if (i >= 0) bb.lists.splice(i, 0, l); else bb.lists.push(l);
+  const moveList = (listId, beforeId) => commit(bb => {
+    const l = bb.lists.find(x => x.id === listId);
+    if (!l) return bb;
+    bb.lists = bb.lists.filter(x => x.id !== listId);
+    const i = bb.lists.findIndex(x => x.id === beforeId);
+    if (i >= 0) bb.lists.splice(i, 0, l);else bb.lists.push(l);
     return bb;
   });
   const shiftList = (listId, dir) => {
-    const act = activeLists.map((l) => l.id); const i = act.indexOf(listId); const j = i + dir;
+    const act = activeLists.map(l => l.id);
+    const i = act.indexOf(listId);
+    const j = i + dir;
     if (j < 0 || j >= act.length) return;
-    if (dir < 0) moveList(listId, act[j]); else moveList(listId, act[j + 1] || null);
+    if (dir < 0) moveList(listId, act[j]);else moveList(listId, act[j + 1] || null);
   };
-  const sortList = (listId, by) => commit((bb) => {
-    const l = bb.lists.find((x) => x.id === listId); if (!l) return bb;
-    const key = { name: (c) => (c.title || "").toLowerCase(), due: (c) => c.due || "9999", created: (c) => c.createdAt || 0 };
-    l.cardIds.sort((a, z) => { const A = key[by](bb.cards[a] || {}), Z = key[by](bb.cards[z] || {}); return A < Z ? -1 : A > Z ? 1 : 0; });
+  const sortList = (listId, by) => commit(bb => {
+    const l = bb.lists.find(x => x.id === listId);
+    if (!l) return bb;
+    const key = {
+      name: c => (c.title || "").toLowerCase(),
+      due: c => c.due || "9999",
+      created: c => c.createdAt || 0
+    };
+    l.cardIds.sort((a, z) => {
+      const A = key[by](bb.cards[a] || {}),
+        Z = key[by](bb.cards[z] || {});
+      return A < Z ? -1 : A > Z ? 1 : 0;
+    });
     return bb;
   });
-
   const openCard = openId && b.cards[openId];
-  const archivedCards = Object.values(b.cards).filter((c) => c.archived);
-  const archivedLists = b.lists.filter((l) => l.archived);
-  const syncText = { saving: "Enregistrement…", pending: "Modifications en attente", error: "Hors ligne, nouvel essai bientôt", ok: "Enregistré dans Sheets" }[sync];
-
-  return (
-    <div className="bd" style={{ background: b.color }}>
-      <header className="bd-hd">
-        <button className="back" onClick={leave} aria-label="Retour à la liste des tableaux">‹ Tableaux</button>
-        <input className="bd-name" key={b.name} defaultValue={b.name} aria-label="Nom du tableau"
-          onBlur={(e) => { const v = e.target.value.trim(); if (v && v !== b.name) commit((bb) => { bb.name = v; return bb; }, `a renommé le tableau en « ${v} »`); }} />
-        {b.members.length > 0 && (
-          <select className="who-sel" value={meId} onChange={(e) => setMeId(e.target.value)} aria-label="Qui êtes-vous ?">
-            <option value="">Qui êtes-vous ?</option>
-            {b.members.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
-          </select>
-        )}
-        <button className="back" onClick={() => setPanel("members")}>{b.members.length ? <span className="avs">{b.members.slice(0, 4).map((m) => <Avatar key={m.id} name={m.name} seed={m.id} size={22} />)}</span> : "Membres"}</button>
-      </header>
-      <div className="tools">
-        <button className={"tool" + (view === "board" ? " on" : "")} onClick={() => setView("board")}>Tableau</button>
-        <button className={"tool" + (view === "dates" ? " on" : "")} onClick={() => setView("dates")}>Échéances</button>
-        <input placeholder="Rechercher" value={f.q} onChange={(e) => setF({ ...f, q: e.target.value })} aria-label="Rechercher une carte" />
-        <select value={f.member} onChange={(e) => setF({ ...f, member: e.target.value })} aria-label="Filtrer par membre">
-          <option value="">Tous les membres</option>
-          {b.members.map((m) => <option key={m.id} value={m.id}>{m.id === meId ? "Mes cartes" : m.name}</option>)}
-        </select>
-        <select value={f.label} onChange={(e) => setF({ ...f, label: e.target.value })} aria-label="Filtrer par étiquette">
-          <option value="">Toutes les étiquettes</option>
-          {b.labels.map((l, i) => <option key={l.id} value={l.id}>{l.name || `Étiquette ${i + 1}`}</option>)}
-        </select>
-        <select value={f.due} onChange={(e) => setF({ ...f, due: e.target.value })} aria-label="Filtrer par échéance">
-          <option value="">Toutes les échéances</option><option value="late">En retard</option><option value="week">Cette semaine</option>
-          <option value="done">Terminées</option><option value="none">Sans échéance</option>
-        </select>
-        {filtering && <button className="tool" onClick={() => setF({ q: "", member: "", label: "", due: "" })}>Effacer les filtres</button>}
-        <button className="tool" onClick={() => setPanel("labels")}>Étiquettes</button>
-        <button className="tool" onClick={() => setPanel("archive")}>Archives</button>
-        <button className="tool" onClick={() => setPanel("activity")}>Activité</button>
-        <button className="tool" onClick={() => setPanel("settings")}>Paramètres</button>
-        <span className="sync">{syncText}</span>
-      </div>
-
-      {view === "board" ? (
-        <main className="lanes" onClick={() => menu && setMenu(null)}>
-          {activeLists.map((l, idx) => {
-            const cards = l.cardIds.map((x) => b.cards[x]).filter((c) => c && !c.archived);
-            const shown = cards.filter(visible);
-            return (
-              <section key={l.id} className={"lane" + (drop === l.id ? " drop" : "")}
-                onDragOver={(e) => { e.preventDefault(); setDrop(l.id); }} onDragLeave={() => setDrop(null)}
-                onDrop={(e) => {
-                  e.preventDefault(); setDrop(null);
-                  if (dragList.current && dragList.current !== l.id) moveList(dragList.current, l.id);
-                  else if (dragCard.current) moveCard(dragCard.current, l.id);
-                  dragCard.current = null; dragList.current = null;
-                }}>
-                <div className="lh" draggable onDragStart={() => (dragList.current = l.id)} onDragEnd={() => (dragList.current = null)}>
-                  <input key={l.name} defaultValue={l.name} aria-label="Nom de la liste"
-                    onBlur={(e) => { const v = e.target.value.trim(); if (v && v !== l.name) commit((bb) => { const x = bb.lists.find((y) => y.id === l.id); if (x) x.name = v; return bb; }); }} />
-                  <span className="n">{filtering ? `${shown.length}/${cards.length}` : cards.length}</span>
-                  <button className="dots" aria-label="Actions de la liste" onClick={(e) => { e.stopPropagation(); setMenu(menu === l.id ? null : l.id); }}>⋯</button>
-                </div>
-                {menu === l.id && (
-                  <div className="menu" onClick={(e) => e.stopPropagation()}>
-                    {idx > 0 && <button onClick={() => { shiftList(l.id, -1); setMenu(null); }}>Déplacer vers la gauche</button>}
-                    {idx < activeLists.length - 1 && <button onClick={() => { shiftList(l.id, 1); setMenu(null); }}>Déplacer vers la droite</button>}
-                    <hr />
-                    <button onClick={() => { sortList(l.id, "name"); setMenu(null); }}>Trier par nom</button>
-                    <button onClick={() => { sortList(l.id, "due"); setMenu(null); }}>Trier par échéance</button>
-                    <button onClick={() => { sortList(l.id, "created"); setMenu(null); }}>Trier par date de création</button>
-                    <hr />
-                    <button onClick={() => { commit((bb) => { bb.lists.find((x) => x.id === l.id)?.cardIds.forEach((x) => bb.cards[x] && (bb.cards[x].archived = true)); return bb; }, `a archivé toutes les cartes de « ${l.name} »`); setMenu(null); }}>Archiver toutes les cartes</button>
-                    <button onClick={() => { commit((bb) => { const x = bb.lists.find((y) => y.id === l.id); if (x) x.archived = true; return bb; }, `a archivé la liste « ${l.name} »`); setMenu(null); }}>Archiver la liste</button>
-                  </div>
-                )}
-                <div className="cards">
-                  {shown.map((c) => (
-                    <CardTile key={c.id} c={c} b={b} onOpen={() => setOpenId(c.id)} dragProps={{
-                      draggable: true,
-                      onDragStart: (e) => { e.stopPropagation(); dragCard.current = c.id; dragList.current = null; },
-                      onDragOver: (e) => e.preventDefault(),
-                      onDrop: (e) => { e.preventDefault(); e.stopPropagation(); setDrop(null); if (dragCard.current && dragCard.current !== c.id) moveCard(dragCard.current, l.id, c.id); dragCard.current = null; },
-                    }} />
-                  ))}
-                  {shown.length === 0 && filtering && cards.length > 0 && <div className="empty">Aucune carte ne correspond aux filtres.</div>}
-                </div>
-                <div className="add">
-                  <AddInput className="" placeholder="+ Ajouter une carte" onAdd={(title) => commit((bb) => {
-                    const c = newCard(title);
-                    if (f.member) c.members = [f.member];
-                    if (f.label) c.labels = [f.label];
-                    bb.cards[c.id] = c; bb.lists.find((x) => x.id === l.id)?.cardIds.push(c.id); return bb;
-                  }, `a ajouté « ${title} » à « ${l.name} »`)} />
-                </div>
-              </section>
-            );
-          })}
-          <div className="newlane">
-            <AddInput className="" placeholder="+ Ajouter une liste" onAdd={(name) => commit((bb) => { bb.lists.push({ id: uid(), name, archived: false, cardIds: [] }); return bb; }, `a ajouté la liste « ${name} »`)} />
-          </div>
-        </main>
-      ) : (
-        <Agenda b={b} visible={visible} open={setOpenId} />
-      )}
-
-      {openCard && <CardModal key={openCard.id} c={openCard} b={b} me={me} commit={commit} close={() => setOpenId(null)} />}
-
-      {panel === "members" && <MembersPanel b={b} meId={meId} setMeId={setMeId} commit={commit} close={() => setPanel(null)} />}
-
-      {panel === "labels" && (
-        <Sheet title="Étiquettes" onClose={() => setPanel(null)}>
-          <div className="sec">
-            {b.labels.map((l) => (
-              <div key={l.id} className="lbrow">
-                <input className="fld" style={{ borderLeft: `10px solid ${l.color}` }} key={l.name} defaultValue={l.name} placeholder="Sans nom"
-                  onBlur={(e) => { const v = e.target.value.trim(); if (v !== l.name) commit((bb) => { const x = bb.labels.find((y) => y.id === l.id); if (x) x.name = v; return bb; }); }} />
-                <select className="fld" style={{ width: 92, background: l.color, color: "#fff" }} value={l.color} aria-label="Couleur"
-                  onChange={(e) => { const v = e.target.value; commit((bb) => { const x = bb.labels.find((y) => y.id === l.id); if (x) x.color = v; return bb; }); }}>
-                  {PALETTE.map((p, i) => <option key={p} value={p} style={{ background: p }}>Couleur {i + 1}</option>)}
-                </select>
-                <Confirm className="del" label="×" confirmLabel="Supprimer" onConfirm={() => commit((bb) => {
-                  bb.labels = bb.labels.filter((x) => x.id !== l.id);
-                  Object.values(bb.cards).forEach((c) => (c.labels = c.labels.filter((x) => x !== l.id)));
-                  return bb;
-                })} />
-              </div>
-            ))}
-            <button className="btn ghost" onClick={() => commit((bb) => { bb.labels.push({ id: uid(), name: "", color: PALETTE[bb.labels.length % PALETTE.length] }); return bb; })}>+ Créer une étiquette</button>
-          </div>
-        </Sheet>
-      )}
-
-      {panel === "archive" && (
-        <Sheet title="Archives" onClose={() => setPanel(null)}>
-          <div className="sec">
-            <h4>Cartes archivées</h4>
-            {archivedCards.length === 0 && <div className="empty">Aucune carte archivée.</div>}
-            {archivedCards.map((c) => (
-              <div key={c.id} className="mrow"><span>{c.title}<small>{b.lists.find((l) => l.cardIds.includes(c.id))?.name}</small></span>
-                <button className="btn ghost" onClick={() => commit((bb) => {
-                  const x = bb.cards[c.id]; if (!x) return bb; x.archived = false;
-                  const home = bb.lists.find((l) => l.cardIds.includes(c.id));
-                  if (!home || home.archived) { bb.lists.forEach((l) => (l.cardIds = l.cardIds.filter((y) => y !== c.id))); const first = bb.lists.find((l) => !l.archived); if (first) first.cardIds.push(c.id); }
-                  return bb;
-                }, `a restauré « ${c.title} »`)}>Restaurer</button>
-                <Confirm className="del" label="Supprimer" confirmLabel="Supprimer" onConfirm={() => commit((bb) => { bb.lists.forEach((l) => (l.cardIds = l.cardIds.filter((y) => y !== c.id))); delete bb.cards[c.id]; return bb; })} />
-              </div>
-            ))}
-          </div>
-          <div className="sec">
-            <h4>Listes archivées</h4>
-            {archivedLists.length === 0 && <div className="empty">Aucune liste archivée.</div>}
-            {archivedLists.map((l) => (
-              <div key={l.id} className="mrow"><span>{l.name}<small>{l.cardIds.length} carte{l.cardIds.length > 1 ? "s" : ""}</small></span>
-                <button className="btn ghost" onClick={() => commit((bb) => { const x = bb.lists.find((y) => y.id === l.id); if (x) x.archived = false; return bb; }, `a restauré la liste « ${l.name} »`)}>Restaurer</button>
-                <Confirm className="del" label="Supprimer" confirmLabel="Supprimer" onConfirm={() => commit((bb) => {
-                  const x = bb.lists.find((y) => y.id === l.id); if (!x) return bb;
-                  x.cardIds.forEach((cid) => delete bb.cards[cid]); bb.lists = bb.lists.filter((y) => y.id !== l.id); return bb;
-                }, `a supprimé la liste « ${l.name} »`)} />
-              </div>
-            ))}
-          </div>
-        </Sheet>
-      )}
-
-      {panel === "activity" && (
-        <Sheet title="Activité" onClose={() => setPanel(null)}>
-          <div className="sec">
-            {(b.activity || []).length === 0 && <div className="empty">Aucune activité pour l'instant.</div>}
-            {(b.activity || []).map((a) => <div key={a.id} className="act">{a.who ? <b>{a.who}</b> : /^a /.test(a.text) ? <b>Quelqu'un</b> : null} {a.text}<time>{fmtAgo(a.at)}</time></div>)}
-          </div>
-        </Sheet>
-      )}
-
-      {panel === "settings" && <SettingsPanel b={b} commit={commit} back={back} close={() => setPanel(null)} />}
-    </div>
-  );
+  const archivedCards = Object.values(b.cards).filter(c => c.archived);
+  const archivedLists = b.lists.filter(l => l.archived);
+  const syncText = {
+    loading: "Mise à jour…",
+    saving: "Enregistrement…",
+    pending: "Modifications en attente",
+    error: "Hors ligne, nouvel essai bientôt",
+    ok: "Enregistré dans Sheets"
+  }[sync];
+  return /*#__PURE__*/React.createElement("div", {
+    className: "bd",
+    style: {
+      background: b.color
+    }
+  }, /*#__PURE__*/React.createElement("header", {
+    className: "bd-hd"
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "back",
+    onClick: leave,
+    "aria-label": "Retour \xE0 la liste des tableaux"
+  }, "\u2039 Tableaux"), /*#__PURE__*/React.createElement("input", {
+    className: "bd-name",
+    key: b.name,
+    defaultValue: b.name,
+    "aria-label": "Nom du tableau",
+    onBlur: e => {
+      const v = e.target.value.trim();
+      if (v && v !== b.name) commit(bb => {
+        bb.name = v;
+        return bb;
+      }, `a renommé le tableau en « ${v} »`);
+    }
+  }), b.members.length > 0 && /*#__PURE__*/React.createElement("select", {
+    className: "who-sel",
+    value: meId,
+    onChange: e => setMeId(e.target.value),
+    "aria-label": "Qui \xEAtes-vous ?"
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "Qui \xEAtes-vous ?"), b.members.map(m => /*#__PURE__*/React.createElement("option", {
+    key: m.id,
+    value: m.id
+  }, m.name))), /*#__PURE__*/React.createElement("button", {
+    className: "back",
+    onClick: () => setPanel("members")
+  }, b.members.length ? /*#__PURE__*/React.createElement("span", {
+    className: "avs"
+  }, b.members.slice(0, 4).map(m => /*#__PURE__*/React.createElement(Avatar, {
+    key: m.id,
+    name: m.name,
+    seed: m.id,
+    size: 22
+  }))) : "Membres")), /*#__PURE__*/React.createElement("div", {
+    className: "tools"
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "tool" + (view === "board" ? " on" : ""),
+    onClick: () => setView("board")
+  }, "Tableau"), /*#__PURE__*/React.createElement("button", {
+    className: "tool" + (view === "dates" ? " on" : ""),
+    onClick: () => setView("dates")
+  }, "\xC9ch\xE9ances"), /*#__PURE__*/React.createElement("input", {
+    placeholder: "Rechercher",
+    value: f.q,
+    onChange: e => setF({
+      ...f,
+      q: e.target.value
+    }),
+    "aria-label": "Rechercher une carte"
+  }), /*#__PURE__*/React.createElement("select", {
+    value: f.member,
+    onChange: e => setF({
+      ...f,
+      member: e.target.value
+    }),
+    "aria-label": "Filtrer par membre"
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "Tous les membres"), b.members.map(m => /*#__PURE__*/React.createElement("option", {
+    key: m.id,
+    value: m.id
+  }, m.id === meId ? "Mes cartes" : m.name))), /*#__PURE__*/React.createElement("select", {
+    value: f.label,
+    onChange: e => setF({
+      ...f,
+      label: e.target.value
+    }),
+    "aria-label": "Filtrer par \xE9tiquette"
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "Toutes les \xE9tiquettes"), b.labels.map((l, i) => /*#__PURE__*/React.createElement("option", {
+    key: l.id,
+    value: l.id
+  }, l.name || `Étiquette ${i + 1}`))), /*#__PURE__*/React.createElement("select", {
+    value: f.due,
+    onChange: e => setF({
+      ...f,
+      due: e.target.value
+    }),
+    "aria-label": "Filtrer par \xE9ch\xE9ance"
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "Toutes les \xE9ch\xE9ances"), /*#__PURE__*/React.createElement("option", {
+    value: "late"
+  }, "En retard"), /*#__PURE__*/React.createElement("option", {
+    value: "week"
+  }, "Cette semaine"), /*#__PURE__*/React.createElement("option", {
+    value: "done"
+  }, "Termin\xE9es"), /*#__PURE__*/React.createElement("option", {
+    value: "none"
+  }, "Sans \xE9ch\xE9ance")), filtering && /*#__PURE__*/React.createElement("button", {
+    className: "tool",
+    onClick: () => setF({
+      q: "",
+      member: "",
+      label: "",
+      due: ""
+    })
+  }, "Effacer les filtres"), /*#__PURE__*/React.createElement("button", {
+    className: "tool",
+    onClick: () => setPanel("labels")
+  }, "\xC9tiquettes"), /*#__PURE__*/React.createElement("button", {
+    className: "tool",
+    onClick: () => setPanel("archive")
+  }, "Archives"), /*#__PURE__*/React.createElement("button", {
+    className: "tool",
+    onClick: () => setPanel("activity")
+  }, "Activit\xE9"), /*#__PURE__*/React.createElement("button", {
+    className: "tool",
+    onClick: () => setPanel("settings")
+  }, "Param\xE8tres"), /*#__PURE__*/React.createElement("span", {
+    className: "sync"
+  }, syncText)), view === "board" ? /*#__PURE__*/React.createElement("main", {
+    className: "lanes",
+    onClick: () => menu && setMenu(null)
+  }, activeLists.map((l, idx) => {
+    const cards = l.cardIds.map(x => b.cards[x]).filter(c => c && !c.archived);
+    const shown = cards.filter(visible);
+    return /*#__PURE__*/React.createElement("section", {
+      key: l.id,
+      className: "lane" + (drop === l.id ? " drop" : ""),
+      onDragOver: e => {
+        e.preventDefault();
+        setDrop(l.id);
+      },
+      onDragLeave: () => setDrop(null),
+      onDrop: e => {
+        e.preventDefault();
+        setDrop(null);
+        if (dragList.current && dragList.current !== l.id) moveList(dragList.current, l.id);else if (dragCard.current) moveCard(dragCard.current, l.id);
+        dragCard.current = null;
+        dragList.current = null;
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "lh",
+      draggable: true,
+      onDragStart: () => dragList.current = l.id,
+      onDragEnd: () => dragList.current = null
+    }, /*#__PURE__*/React.createElement("input", {
+      key: l.name,
+      defaultValue: l.name,
+      "aria-label": "Nom de la liste",
+      onBlur: e => {
+        const v = e.target.value.trim();
+        if (v && v !== l.name) commit(bb => {
+          const x = bb.lists.find(y => y.id === l.id);
+          if (x) x.name = v;
+          return bb;
+        });
+      }
+    }), /*#__PURE__*/React.createElement("span", {
+      className: "n"
+    }, filtering ? `${shown.length}/${cards.length}` : cards.length), /*#__PURE__*/React.createElement("button", {
+      className: "dots",
+      "aria-label": "Actions de la liste",
+      onClick: e => {
+        e.stopPropagation();
+        setMenu(menu === l.id ? null : l.id);
+      }
+    }, "\u22EF")), menu === l.id && /*#__PURE__*/React.createElement("div", {
+      className: "menu",
+      onClick: e => e.stopPropagation()
+    }, idx > 0 && /*#__PURE__*/React.createElement("button", {
+      onClick: () => {
+        shiftList(l.id, -1);
+        setMenu(null);
+      }
+    }, "D\xE9placer vers la gauche"), idx < activeLists.length - 1 && /*#__PURE__*/React.createElement("button", {
+      onClick: () => {
+        shiftList(l.id, 1);
+        setMenu(null);
+      }
+    }, "D\xE9placer vers la droite"), /*#__PURE__*/React.createElement("hr", null), /*#__PURE__*/React.createElement("button", {
+      onClick: () => {
+        sortList(l.id, "name");
+        setMenu(null);
+      }
+    }, "Trier par nom"), /*#__PURE__*/React.createElement("button", {
+      onClick: () => {
+        sortList(l.id, "due");
+        setMenu(null);
+      }
+    }, "Trier par \xE9ch\xE9ance"), /*#__PURE__*/React.createElement("button", {
+      onClick: () => {
+        sortList(l.id, "created");
+        setMenu(null);
+      }
+    }, "Trier par date de cr\xE9ation"), /*#__PURE__*/React.createElement("hr", null), /*#__PURE__*/React.createElement("button", {
+      onClick: () => {
+        commit(bb => {
+          bb.lists.find(x => x.id === l.id)?.cardIds.forEach(x => bb.cards[x] && (bb.cards[x].archived = true));
+          return bb;
+        }, `a archivé toutes les cartes de « ${l.name} »`);
+        setMenu(null);
+      }
+    }, "Archiver toutes les cartes"), /*#__PURE__*/React.createElement("button", {
+      onClick: () => {
+        commit(bb => {
+          const x = bb.lists.find(y => y.id === l.id);
+          if (x) x.archived = true;
+          return bb;
+        }, `a archivé la liste « ${l.name} »`);
+        setMenu(null);
+      }
+    }, "Archiver la liste")), /*#__PURE__*/React.createElement("div", {
+      className: "cards"
+    }, shown.map(c => /*#__PURE__*/React.createElement(CardTile, {
+      key: c.id,
+      c: c,
+      b: b,
+      onOpen: () => setOpenId(c.id),
+      dragProps: {
+        draggable: true,
+        onDragStart: e => {
+          e.stopPropagation();
+          dragCard.current = c.id;
+          dragList.current = null;
+        },
+        onDragOver: e => e.preventDefault(),
+        onDrop: e => {
+          e.preventDefault();
+          e.stopPropagation();
+          setDrop(null);
+          if (dragCard.current && dragCard.current !== c.id) moveCard(dragCard.current, l.id, c.id);
+          dragCard.current = null;
+        }
+      }
+    })), shown.length === 0 && filtering && cards.length > 0 && /*#__PURE__*/React.createElement("div", {
+      className: "empty"
+    }, "Aucune carte ne correspond aux filtres.")), /*#__PURE__*/React.createElement("div", {
+      className: "add"
+    }, /*#__PURE__*/React.createElement(AddInput, {
+      className: "",
+      placeholder: "+ Ajouter une carte",
+      onAdd: title => commit(bb => {
+        const c = newCard(title);
+        if (f.member) c.members = [f.member];
+        if (f.label) c.labels = [f.label];
+        bb.cards[c.id] = c;
+        bb.lists.find(x => x.id === l.id)?.cardIds.push(c.id);
+        return bb;
+      }, `a ajouté « ${title} » à « ${l.name} »`)
+    })));
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "newlane"
+  }, /*#__PURE__*/React.createElement(AddInput, {
+    className: "",
+    placeholder: "+ Ajouter une liste",
+    onAdd: name => commit(bb => {
+      bb.lists.push({
+        id: uid(),
+        name,
+        archived: false,
+        cardIds: []
+      });
+      return bb;
+    }, `a ajouté la liste « ${name} »`)
+  }))) : /*#__PURE__*/React.createElement(Agenda, {
+    b: b,
+    visible: visible,
+    open: setOpenId
+  }), openCard && /*#__PURE__*/React.createElement(CardModal, {
+    key: openCard.id,
+    c: openCard,
+    b: b,
+    me: me,
+    commit: commit,
+    close: () => setOpenId(null)
+  }), panel === "members" && /*#__PURE__*/React.createElement(MembersPanel, {
+    b: b,
+    meId: meId,
+    setMeId: setMeId,
+    commit: commit,
+    close: () => setPanel(null)
+  }), panel === "labels" && /*#__PURE__*/React.createElement(Sheet, {
+    title: "\xC9tiquettes",
+    onClose: () => setPanel(null)
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "sec"
+  }, b.labels.map(l => /*#__PURE__*/React.createElement("div", {
+    key: l.id,
+    className: "lbrow"
+  }, /*#__PURE__*/React.createElement("input", {
+    className: "fld",
+    style: {
+      borderLeft: `10px solid ${l.color}`
+    },
+    key: l.name,
+    defaultValue: l.name,
+    placeholder: "Sans nom",
+    onBlur: e => {
+      const v = e.target.value.trim();
+      if (v !== l.name) commit(bb => {
+        const x = bb.labels.find(y => y.id === l.id);
+        if (x) x.name = v;
+        return bb;
+      });
+    }
+  }), /*#__PURE__*/React.createElement("select", {
+    className: "fld",
+    style: {
+      width: 92,
+      background: l.color,
+      color: "#fff"
+    },
+    value: l.color,
+    "aria-label": "Couleur",
+    onChange: e => {
+      const v = e.target.value;
+      commit(bb => {
+        const x = bb.labels.find(y => y.id === l.id);
+        if (x) x.color = v;
+        return bb;
+      });
+    }
+  }, PALETTE.map((p, i) => /*#__PURE__*/React.createElement("option", {
+    key: p,
+    value: p,
+    style: {
+      background: p
+    }
+  }, "Couleur ", i + 1))), /*#__PURE__*/React.createElement(Confirm, {
+    className: "del",
+    label: "\xD7",
+    confirmLabel: "Supprimer",
+    onConfirm: () => commit(bb => {
+      bb.labels = bb.labels.filter(x => x.id !== l.id);
+      Object.values(bb.cards).forEach(c => c.labels = c.labels.filter(x => x !== l.id));
+      return bb;
+    })
+  }))), /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost",
+    onClick: () => commit(bb => {
+      bb.labels.push({
+        id: uid(),
+        name: "",
+        color: PALETTE[bb.labels.length % PALETTE.length]
+      });
+      return bb;
+    })
+  }, "+ Cr\xE9er une \xE9tiquette"))), panel === "archive" && /*#__PURE__*/React.createElement(Sheet, {
+    title: "Archives",
+    onClose: () => setPanel(null)
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "sec"
+  }, /*#__PURE__*/React.createElement("h4", null, "Cartes archiv\xE9es"), archivedCards.length === 0 && /*#__PURE__*/React.createElement("div", {
+    className: "empty"
+  }, "Aucune carte archiv\xE9e."), archivedCards.map(c => /*#__PURE__*/React.createElement("div", {
+    key: c.id,
+    className: "mrow"
+  }, /*#__PURE__*/React.createElement("span", null, c.title, /*#__PURE__*/React.createElement("small", null, b.lists.find(l => l.cardIds.includes(c.id))?.name)), /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost",
+    onClick: () => commit(bb => {
+      const x = bb.cards[c.id];
+      if (!x) return bb;
+      x.archived = false;
+      const home = bb.lists.find(l => l.cardIds.includes(c.id));
+      if (!home || home.archived) {
+        bb.lists.forEach(l => l.cardIds = l.cardIds.filter(y => y !== c.id));
+        const first = bb.lists.find(l => !l.archived);
+        if (first) first.cardIds.push(c.id);
+      }
+      return bb;
+    }, `a restauré « ${c.title} »`)
+  }, "Restaurer"), /*#__PURE__*/React.createElement(Confirm, {
+    className: "del",
+    label: "Supprimer",
+    confirmLabel: "Supprimer",
+    onConfirm: () => commit(bb => {
+      bb.lists.forEach(l => l.cardIds = l.cardIds.filter(y => y !== c.id));
+      delete bb.cards[c.id];
+      return bb;
+    })
+  })))), /*#__PURE__*/React.createElement("div", {
+    className: "sec"
+  }, /*#__PURE__*/React.createElement("h4", null, "Listes archiv\xE9es"), archivedLists.length === 0 && /*#__PURE__*/React.createElement("div", {
+    className: "empty"
+  }, "Aucune liste archiv\xE9e."), archivedLists.map(l => /*#__PURE__*/React.createElement("div", {
+    key: l.id,
+    className: "mrow"
+  }, /*#__PURE__*/React.createElement("span", null, l.name, /*#__PURE__*/React.createElement("small", null, l.cardIds.length, " carte", l.cardIds.length > 1 ? "s" : "")), /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost",
+    onClick: () => commit(bb => {
+      const x = bb.lists.find(y => y.id === l.id);
+      if (x) x.archived = false;
+      return bb;
+    }, `a restauré la liste « ${l.name} »`)
+  }, "Restaurer"), /*#__PURE__*/React.createElement(Confirm, {
+    className: "del",
+    label: "Supprimer",
+    confirmLabel: "Supprimer",
+    onConfirm: () => commit(bb => {
+      const x = bb.lists.find(y => y.id === l.id);
+      if (!x) return bb;
+      x.cardIds.forEach(cid => delete bb.cards[cid]);
+      bb.lists = bb.lists.filter(y => y.id !== l.id);
+      return bb;
+    }, `a supprimé la liste « ${l.name} »`)
+  }))))), panel === "activity" && /*#__PURE__*/React.createElement(Sheet, {
+    title: "Activit\xE9",
+    onClose: () => setPanel(null)
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "sec"
+  }, (b.activity || []).length === 0 && /*#__PURE__*/React.createElement("div", {
+    className: "empty"
+  }, "Aucune activit\xE9 pour l'instant."), (b.activity || []).map(a => /*#__PURE__*/React.createElement("div", {
+    key: a.id,
+    className: "act"
+  }, a.who ? /*#__PURE__*/React.createElement("b", null, a.who) : /^a /.test(a.text) ? /*#__PURE__*/React.createElement("b", null, "Quelqu'un") : null, " ", a.text, /*#__PURE__*/React.createElement("time", null, fmtAgo(a.at)))))), panel === "settings" && /*#__PURE__*/React.createElement(SettingsPanel, {
+    b: b,
+    commit: commit,
+    back: back,
+    close: () => setPanel(null)
+  }));
 }
-
-function SettingsPanel({ b, commit, back, close }) {
+function SettingsPanel(_ref10) {
+  let {
+    b,
+    commit,
+    back,
+    close
+  } = _ref10;
   const [err, setErr] = useState("");
-  return (
-    <Sheet title="Paramètres du tableau" onClose={close}>
-      <div className="sec">
-        <h4>Couleur de fond</h4>
-        <Swatches colors={BG} value={b.color} onPick={(color) => commit((bb) => { bb.color = color; return bb; })} />
-      </div>
-      <div className="sec">
-        <h4>Lien direct vers ce tableau</h4>
-        <div className="inl">
-          <input className="fld" readOnly value={location.href} onFocus={(e) => e.target.select()} />
-          <button className="btn ghost" onClick={async () => { try { await navigator.clipboard.writeText(location.href); setErr("Lien copié."); } catch (e) { setErr("Sélectionnez le lien et copiez-le."); } }}>Copier</button>
-        </div>
-      </div>
-      <div className="sec">
-        <h4>Supprimer le tableau</h4>
-        <Confirm label="Supprimer ce tableau" confirmLabel="Supprimer définitivement" onConfirm={async () => {
-          try { await api("deleteBoard", { id: b.id }); back(); } catch (e) { setErr(errText(e)); }
-        }} />
-        <p className="hint">Ses lignes sont retirées du classeur. Les sauvegardes Excel déjà faites le conservent.</p>
-      </div>
-      {err && <p className="hint" role="status">{err}</p>}
-    </Sheet>
-  );
+  return /*#__PURE__*/React.createElement(Sheet, {
+    title: "Param\xE8tres du tableau",
+    onClose: close
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "sec"
+  }, /*#__PURE__*/React.createElement("h4", null, "Couleur de fond"), /*#__PURE__*/React.createElement(Swatches, {
+    colors: BG,
+    value: b.color,
+    onPick: color => commit(bb => {
+      bb.color = color;
+      return bb;
+    })
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "sec"
+  }, /*#__PURE__*/React.createElement("h4", null, "Lien direct vers ce tableau"), /*#__PURE__*/React.createElement("div", {
+    className: "inl"
+  }, /*#__PURE__*/React.createElement("input", {
+    className: "fld",
+    readOnly: true,
+    value: location.href,
+    onFocus: e => e.target.select()
+  }), /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost",
+    onClick: async () => {
+      try {
+        await navigator.clipboard.writeText(location.href);
+        setErr("Lien copié.");
+      } catch (e) {
+        setErr("Sélectionnez le lien et copiez-le.");
+      }
+    }
+  }, "Copier"))), /*#__PURE__*/React.createElement("div", {
+    className: "sec"
+  }, /*#__PURE__*/React.createElement("h4", null, "Supprimer le tableau"), /*#__PURE__*/React.createElement(Confirm, {
+    label: "Supprimer ce tableau",
+    confirmLabel: "Supprimer d\xE9finitivement",
+    onConfirm: async () => {
+      try {
+        await api("deleteBoard", {
+          id: b.id
+        });
+        local.del("b:" + b.id);
+        const l = local.get("list");
+        if (l) local.set("list", l.filter(x => x.id !== b.id));
+        back();
+      } catch (e) {
+        setErr(errText(e));
+      }
+    }
+  }), /*#__PURE__*/React.createElement("p", {
+    className: "hint"
+  }, "Ses lignes sont retir\xE9es du classeur. Les sauvegardes Excel d\xE9j\xE0 faites le conservent.")), err && /*#__PURE__*/React.createElement("p", {
+    className: "hint",
+    role: "status"
+  }, err));
 }
-
-function Agenda({ b, visible, open }) {
-  const inActive = (c) => !b.lists.find((l) => l.cardIds.includes(c.id))?.archived;
-  const cards = Object.values(b.cards).filter((c) => c.due && visible(c) && inActive(c)).sort((x, y) => (x.due < y.due ? -1 : 1));
-  const now = new Date(); const endToday = new Date(now); endToday.setHours(23, 59, 59, 999);
+function Agenda(_ref11) {
+  let {
+    b,
+    visible,
+    open
+  } = _ref11;
+  const inActive = c => !b.lists.find(l => l.cardIds.includes(c.id))?.archived;
+  const cards = Object.values(b.cards).filter(c => c.due && visible(c) && inActive(c)).sort((x, y) => x.due < y.due ? -1 : 1);
+  const now = new Date();
+  const endToday = new Date(now);
+  endToday.setHours(23, 59, 59, 999);
   const weekEnd = new Date(endToday.getTime() + 6 * 86400000);
-  const groups = [
-    ["En retard", cards.filter((c) => !c.dueDone && new Date(c.due) < now)],
-    ["Aujourd'hui", cards.filter((c) => !c.dueDone && new Date(c.due) >= now && new Date(c.due) <= endToday)],
-    ["Cette semaine", cards.filter((c) => !c.dueDone && new Date(c.due) > endToday && new Date(c.due) <= weekEnd)],
-    ["Plus tard", cards.filter((c) => !c.dueDone && new Date(c.due) > weekEnd)],
-    ["Terminées", cards.filter((c) => c.dueDone)],
-  ].filter(([, a]) => a.length);
-  const noDue = Object.values(b.cards).filter((c) => !c.due && visible(c) && inActive(c)).length;
-  return (
-    <main className="agenda">
-      {groups.length === 0 && <h3>Aucune carte avec échéance. Ouvrez une carte pour en ajouter une.</h3>}
-      {groups.map(([t, a]) => (
-        <div key={t}><h3>{t} · {a.length}</h3>
-          {a.map((c) => <div key={c.id}><CardTile c={c} b={b} onOpen={() => open(c.id)} dragProps={{}} /></div>)}
-        </div>
-      ))}
-      {noDue > 0 && <h3 style={{ opacity: 0.8, fontWeight: 400 }}>{noDue} carte{noDue > 1 ? "s" : ""} sans échéance.</h3>}
-    </main>
-  );
+  const groups = [["En retard", cards.filter(c => !c.dueDone && new Date(c.due) < now)], ["Aujourd'hui", cards.filter(c => !c.dueDone && new Date(c.due) >= now && new Date(c.due) <= endToday)], ["Cette semaine", cards.filter(c => !c.dueDone && new Date(c.due) > endToday && new Date(c.due) <= weekEnd)], ["Plus tard", cards.filter(c => !c.dueDone && new Date(c.due) > weekEnd)], ["Terminées", cards.filter(c => c.dueDone)]].filter(_ref12 => {
+    let [, a] = _ref12;
+    return a.length;
+  });
+  const noDue = Object.values(b.cards).filter(c => !c.due && visible(c) && inActive(c)).length;
+  return /*#__PURE__*/React.createElement("main", {
+    className: "agenda"
+  }, groups.length === 0 && /*#__PURE__*/React.createElement("h3", null, "Aucune carte avec \xE9ch\xE9ance. Ouvrez une carte pour en ajouter une."), groups.map(_ref13 => {
+    let [t, a] = _ref13;
+    return /*#__PURE__*/React.createElement("div", {
+      key: t
+    }, /*#__PURE__*/React.createElement("h3", null, t, " \xB7 ", a.length), a.map(c => /*#__PURE__*/React.createElement("div", {
+      key: c.id
+    }, /*#__PURE__*/React.createElement(CardTile, {
+      c: c,
+      b: b,
+      onOpen: () => open(c.id),
+      dragProps: {}
+    }))));
+  }), noDue > 0 && /*#__PURE__*/React.createElement("h3", {
+    style: {
+      opacity: 0.8,
+      fontWeight: 400
+    }
+  }, noDue, " carte", noDue > 1 ? "s" : "", " sans \xE9ch\xE9ance."));
 }
-
-function MembersPanel({ b, meId, setMeId, commit, close }) {
-  return (
-    <Sheet title="Membres" onClose={close}>
-      <div className="sec">
-        {b.members.length === 0 && <div className="empty">Ajoutez les personnes qui participent à ce projet. Elles pourront être assignées aux cartes.</div>}
-        {b.members.map((m) => (
-          <div key={m.id} className="mrow"><Avatar name={m.name} seed={m.id} />
-            <span><input className="fld" key={m.name} defaultValue={m.name} aria-label="Nom du membre"
-              onBlur={(e) => { const v = e.target.value.trim(); if (v && v !== m.name) commit((bb) => { const x = bb.members.find((y) => y.id === m.id); if (x) x.name = v; return bb; }); }} /></span>
-            {m.id === meId ? <span className="n" style={{ flex: "0 0 auto" }}>c'est vous</span>
-              : <button className="btn ghost" onClick={() => setMeId(m.id)}>C'est moi</button>}
-            <Confirm className="del" label="Retirer" confirmLabel="Retirer" onConfirm={() => {
-              if (m.id === meId) setMeId("");
-              commit((bb) => {
-                bb.members = bb.members.filter((x) => x.id !== m.id);
-                Object.values(bb.cards).forEach((c) => (c.members = c.members.filter((x) => x !== m.id)));
-                return bb;
-              }, `a retiré ${m.name}`);
-            }} />
-          </div>
-        ))}
-      </div>
-      <div className="sec">
-        <h4>Ajouter un membre</h4>
-        <AddInput placeholder="Prénom ou nom" blurAdds={false} onAdd={(name) => commit((bb) => { bb.members.push({ id: uid(), name }); return bb; }, `a ajouté ${name}`)} />
-        <p className="hint">« C'est moi » sert à signer vos commentaires et l'historique. Ce choix n'est enregistré nulle part : il est à refaire à chaque ouverture de la page.</p>
-      </div>
-    </Sheet>
-  );
+function MembersPanel(_ref14) {
+  let {
+    b,
+    meId,
+    setMeId,
+    commit,
+    close
+  } = _ref14;
+  return /*#__PURE__*/React.createElement(Sheet, {
+    title: "Membres",
+    onClose: close
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "sec"
+  }, b.members.length === 0 && /*#__PURE__*/React.createElement("div", {
+    className: "empty"
+  }, "Ajoutez les personnes qui participent \xE0 ce projet. Elles pourront \xEAtre assign\xE9es aux cartes."), b.members.map(m => /*#__PURE__*/React.createElement("div", {
+    key: m.id,
+    className: "mrow"
+  }, /*#__PURE__*/React.createElement(Avatar, {
+    name: m.name,
+    seed: m.id
+  }), /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("input", {
+    className: "fld",
+    key: m.name,
+    defaultValue: m.name,
+    "aria-label": "Nom du membre",
+    onBlur: e => {
+      const v = e.target.value.trim();
+      if (v && v !== m.name) commit(bb => {
+        const x = bb.members.find(y => y.id === m.id);
+        if (x) x.name = v;
+        return bb;
+      });
+    }
+  })), m.id === meId ? /*#__PURE__*/React.createElement("span", {
+    className: "n",
+    style: {
+      flex: "0 0 auto"
+    }
+  }, "c'est vous") : /*#__PURE__*/React.createElement("button", {
+    className: "btn ghost",
+    onClick: () => setMeId(m.id)
+  }, "C'est moi"), /*#__PURE__*/React.createElement(Confirm, {
+    className: "del",
+    label: "Retirer",
+    confirmLabel: "Retirer",
+    onConfirm: () => {
+      if (m.id === meId) setMeId("");
+      commit(bb => {
+        bb.members = bb.members.filter(x => x.id !== m.id);
+        Object.values(bb.cards).forEach(c => c.members = c.members.filter(x => x !== m.id));
+        return bb;
+      }, `a retiré ${m.name}`);
+    }
+  })))), /*#__PURE__*/React.createElement("div", {
+    className: "sec"
+  }, /*#__PURE__*/React.createElement("h4", null, "Ajouter un membre"), /*#__PURE__*/React.createElement(AddInput, {
+    placeholder: "Pr\xE9nom ou nom",
+    blurAdds: false,
+    onAdd: name => commit(bb => {
+      bb.members.push({
+        id: uid(),
+        name
+      });
+      return bb;
+    }, `a ajouté ${name}`)
+  }), /*#__PURE__*/React.createElement("p", {
+    className: "hint"
+  }, "\xAB C'est moi \xBB sert \xE0 signer vos commentaires et l'historique. Ce choix n'est enregistr\xE9 nulle part : il est \xE0 refaire \xE0 chaque ouverture de la page.")));
 }
 
 /* ============ Application ============ */
@@ -933,25 +1907,35 @@ function App() {
   const [boardId, setBoardId] = useState(() => new URLSearchParams(location.hash.slice(1)).get("t"));
 
   // L'adresse garde le tableau ouvert (#t=…) : on peut actualiser ou partager le lien d'un tableau
-  useEffect(() => { history.replaceState(null, "", boardId ? "#t=" + boardId : location.pathname + location.search); }, [boardId]);
+  useEffect(() => {
+    history.replaceState(null, "", boardId ? "#t=" + boardId : location.pathname + location.search);
+  }, [boardId]);
   useEffect(() => {
     const onHash = () => setBoardId(new URLSearchParams(location.hash.slice(1)).get("t"));
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
-
-  if (!API_URL) return (
-    <div className="auth"><div className="auth-box">
-      <h1 className="disp" style={{ fontSize: 26 }}>Configuration incomplète</h1>
-      <p className="sub">Renseignez API_URL en haut du script de index.html avec l'URL /exec de votre script Apps Script, puis republiez la page.</p>
-    </div></div>
-  );
-  if (boardId) return <Board key={boardId} id={boardId} back={() => setBoardId(null)} />;
-  return <Home open={setBoardId} />;
+  if (!API_URL) return /*#__PURE__*/React.createElement("div", {
+    className: "auth"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "auth-box"
+  }, /*#__PURE__*/React.createElement("h1", {
+    className: "disp",
+    style: {
+      fontSize: 26
+    }
+  }, "Configuration incompl\xE8te"), /*#__PURE__*/React.createElement("p", {
+    className: "sub"
+  }, "Renseignez API_URL en haut du script de index.html avec l'URL /exec de votre script Apps Script, puis republiez la page.")));
+  if (boardId) return /*#__PURE__*/React.createElement(Board, {
+    key: boardId,
+    id: boardId,
+    back: () => setBoardId(null)
+  });
+  return /*#__PURE__*/React.createElement(Home, {
+    open: setBoardId
+  });
 }
-
-ReactDOM.createRoot(document.getElementById("root")).render(<App />);
-
-</script>
+ReactDOM.createRoot(document.getElementById("root")).render(/*#__PURE__*/React.createElement(App, null));</script>
 </body>
 </html>
