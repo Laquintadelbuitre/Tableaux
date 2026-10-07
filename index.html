@@ -161,7 +161,7 @@ const { useState, useEffect, useRef, useCallback } = React;
 
 /* ============ Configuration ============ */
 // URL /exec de votre déploiement Apps Script
-const API_URL = "";
+const API_URL = "https://script.google.com/macros/s/AKfycbwEfS5sLWYM7Mrckdzi-lO_m-3G8xCnNmvI37yNTi2FDV1XjypBwifBX42gvthRMxCiEw/exec";
 
 async function api(action, data = {}) {
   const res = await fetch(API_URL, { method: "POST", body: JSON.stringify({ action, ...data }) });
